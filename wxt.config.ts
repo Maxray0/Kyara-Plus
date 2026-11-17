@@ -16,6 +16,7 @@ export default defineConfig({
       '.freebuff/**',
       '.cloud-attachments/**',
       'AGENTS.md',
+      'README.md',
       'llms.txt',
       'eslint.config.js',
       'vitest.config.ts',
