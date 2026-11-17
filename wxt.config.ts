@@ -4,6 +4,25 @@ import { defineConfig } from 'wxt';
 export default defineConfig({
   srcDir: 'src',
   manifestVersion: 3,
+  // L'archive de sources pour AMO ne doit jamais embarquer les docs privées, les tests
+  // ni l'historique legacy : seuls le code et les fichiers de build y entrent.
+  zip: {
+    excludeSources: [
+      'docs/**',
+      'tests/**',
+      'legacy/**',
+      'scripts/**',
+      '.github/**',
+      '.freebuff/**',
+      '.cloud-attachments/**',
+      'AGENTS.md',
+      'llms.txt',
+      'eslint.config.js',
+      'vitest.config.ts',
+      '.prettierrc.json',
+      '.prettierignore',
+    ],
+  },
   manifest: ({ browser }) => ({
     name: 'Kyara Plus',
     description:
