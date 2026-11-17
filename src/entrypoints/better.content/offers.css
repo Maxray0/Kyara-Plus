@@ -1,0 +1,106 @@
+/* Outils injectés dans la page des offres, dans le thème du marché. */
+.kyara-plus-offers-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--kl-mut, #8a8590);
+  font: 11px/1.4 var(--body, system-ui, sans-serif);
+}
+
+.kyara-plus-offers-good {
+  min-height: 30px;
+  padding: 5px 10px;
+  border: 1px solid var(--kl-line2, #3a3547);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--kl-fg2, #c5c1cf);
+  cursor: pointer;
+  font: 800 10px/1.2 var(--body, system-ui, sans-serif);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.kyara-plus-offers-good:hover,
+.kyara-plus-offers-good[aria-pressed='true'] {
+  border-color: var(--kl-acc, #ff4d2e);
+  color: var(--kl-fg, #edeae4);
+  background: rgb(255 77 46 / 12%);
+}
+
+.kyara-plus-offers-auto {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.kyara-plus-offers-auto input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--kl-acc, #ff4d2e);
+}
+
+.kyara-plus-offers-auto-status,
+.kyara-plus-offers-status {
+  color: var(--kl-mut, #8a8590);
+  font-size: 10px;
+}
+
+.kyara-plus-offer-warning {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 5px;
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border: 1px solid rgb(242 193 78 / 45%);
+  border-radius: 8px;
+  background: rgb(242 193 78 / 9%);
+  color: var(--kl-fg2, #c5c1cf);
+  font: 11px/1.4 var(--body, system-ui, sans-serif);
+}
+
+.kyara-plus-offer-warning[hidden] {
+  display: none !important;
+}
+
+.kyara-plus-offer-warning strong {
+  color: var(--kl-gold, #ffc53d);
+}
+
+.kyara-plus-offer-warning a {
+  color: var(--kl-acc, #ff4d2e);
+  font-weight: 700;
+  text-underline-offset: 2px;
+}
+
+.offers .offer.kyara-plus-hidden {
+  display: none !important;
+}
+
+.offers .offer.kyara-plus-good-offer {
+  border-color: var(--kl-rar-U, #3fbf7f);
+  box-shadow: inset 3px 0 var(--kl-rar-U, #3fbf7f);
+}
+
+.offers .offer.kyara-plus-offer-target {
+  outline: 2px solid var(--kl-acc, #ff4d2e);
+  outline-offset: 3px;
+  animation: kyara-plus-offer-pulse 1.2s ease-in-out 2;
+}
+
+@keyframes kyara-plus-offer-pulse {
+  50% {
+    outline-color: var(--kl-gold, #ffc53d);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .offers .offer.kyara-plus-offer-target {
+    animation: none;
+  }
+}

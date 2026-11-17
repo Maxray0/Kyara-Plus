@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Doublons · Kyara Plus</title>
+    <link rel="icon" href="/icon/32.png" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header class="top">
+      <h1>Doublons</h1>
+      <div class="top-actions">
+        <div id="alert-bell"></div>
+        <nav class="tabs" role="tablist" aria-label="Sections">
+          <button type="button" id="tab-sell" class="on" role="tab" aria-selected="true">
+            Vente
+          </button>
+          <button type="button" id="tab-trades" role="tab" aria-selected="false">
+            Échanges
+          </button>
+          <button type="button" id="tab-wishes" role="tab" aria-selected="false">Envies</button>
+          <button type="button" id="tab-activity" role="tab" aria-selected="false">
+            Activité
+          </button>
+        </nav>
+      </div>
+    </header>
+
+    <section id="pane-sell" role="tabpanel">
+      <div class="actions">
+        <button type="button" id="load" class="primary">Charger mes doublons</button>
+        <button type="button" id="estimate" disabled>Estimer les prix</button>
+        <button type="button" id="fill" disabled>Remplir les emplacements</button>
+      </div>
+      <p id="status" role="status"></p>
+      <p id="slots" class="muted"></p>
+
+      <section class="active-box" aria-labelledby="active-title">
+        <div class="section-head">
+          <h2 id="active-title">Annonces actives</h2>
+          <span id="active-count" class="muted"></span>
+        </div>
+        <div id="active-list" class="scroll"></div>
+      </section>
+
+      <details id="settings-box">
+        <summary>Réglages de vente</summary>
+        <form id="settings" class="settings"></form>
+      </details>
+
+      <div class="scroll"><table id="table" hidden></table></div>
+
+      <details>
+        <summary>Journal</summary>
+        <ul id="log"></ul>
+      </details>
+    </section>
+
+    <section id="pane-trades" role="tabpanel" hidden>
+      <div class="actions">
+        <button type="button" id="load-trades" class="primary">Charger les échanges</button>
+        <label class="inline">
+          <input type="checkbox" id="trades-good-only" />
+          Bons échanges seulement
+        </label>
+      </div>
+      <p id="trades-status" class="muted" role="status"></p>
+      <p id="trades-refresh" class="muted"></p>
+      <button type="button" id="trades-retry" hidden>Réessayer la liste</button>
+
+      <details>
+        <summary>Réglages des échanges</summary>
+        <form id="trade-settings" class="settings"></form>
+      </details>
+
+      <div id="trades-list"></div>
+    </section>
+
+    <section id="pane-activity" role="tabpanel" hidden>
+      <div class="actions">
+        <button type="button" id="load-activity" class="primary">Actualiser</button>
+      </div>
+      <p id="activity-status" class="muted" role="status"></p>
+      <div id="activity-summary"></div>
+      <h2 class="activity-title">Journal</h2>
+      <ul id="activity-log" class="activity-log"></ul>
+    </section>
+
+    <section id="pane-wishes" role="tabpanel" hidden>
+      <div class="actions">
+        <button type="button" id="load-wishes" class="primary">Charger mes envies</button>
+      </div>
+      <p id="wish-status" class="muted" role="status"></p>
+
+      <div id="wish-add" hidden>
+        <input
+          id="wish-search"
+          type="search"
+          placeholder="Chercher une carte à ajouter…"
+          autocomplete="off"
+        />
+        <div id="wish-results" class="wish-results"></div>
+      </div>
+
+      <div id="wish-list" class="wish-list"></div>
+    </section>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

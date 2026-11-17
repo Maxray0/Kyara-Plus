@@ -1,0 +1,1650 @@
+:host {
+  all: initial;
+}
+
+.kui,
+.kui *,
+.kui *::before,
+.kui *::after {
+  box-sizing: border-box;
+}
+
+.kui {
+  --kui-ink: #14121f;
+  --kui-panel: #201c31;
+  --kui-raise: #2b2541;
+  --kui-line: #3c3457;
+  --kui-text: #f4f0ff;
+  --kui-muted: #aaa2c5;
+  --kui-brand: #ff5a3c;
+  --kui-brand-hi: #ff8068;
+  --kui-mint: #46d19e;
+  --kui-gold: #f2c14e;
+  --kui-violet: #8b52ff;
+
+  color-scheme: dark;
+  color: var(--kui-text);
+  font:
+    14px/1.45 ui-rounded,
+    'Segoe UI',
+    system-ui,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.kui [hidden] {
+  display: none !important;
+}
+
+.kui button,
+.kui a,
+.kui input {
+  font: inherit;
+}
+
+.kui button:focus-visible,
+.kui a:focus-visible {
+  outline: 2px solid var(--kui-brand-hi);
+  outline-offset: 2px;
+}
+
+/* Lanceur */
+.kui-launcher {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  z-index: 2147483646;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px 6px 6px;
+  border: 1px solid var(--kui-line);
+  border-radius: 14px;
+  background: var(--kui-ink);
+  color: var(--kui-text);
+  box-shadow: 0 10px 28px rgba(8, 6, 20, 0.42);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    transform 0.18s ease,
+    border-color 0.18s ease,
+    opacity 0.18s ease;
+}
+
+.kui-launcher:hover {
+  border-color: var(--kui-brand);
+  transform: translateY(-1px);
+}
+
+:host(.is-open) .kui-launcher {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.kui-glyph {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--kui-brand), var(--kui-violet));
+  color: #fff;
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: -0.06em;
+}
+
+.kui-glyph.kui-logo {
+  background: none;
+  object-fit: contain;
+}
+
+.kui-launcher-copy {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.kui-launcher-copy b {
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.kui-launcher-copy small {
+  overflow: hidden;
+  color: var(--kui-muted);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Tiroir non modal : il ne bloque ni le clic ni le défilement de la page. */
+.kui-panel {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  bottom: 12px;
+  left: auto;
+  z-index: 2147483647;
+  display: flex;
+  flex-direction: column;
+  width: min(420px, calc(100vw - 24px));
+  overflow: hidden;
+  border: 1px solid var(--kui-line);
+  border-radius: 18px;
+  background: linear-gradient(180deg, #241f36, var(--kui-panel));
+  box-shadow: 0 24px 70px rgba(8, 6, 20, 0.62);
+  visibility: hidden;
+  transform: translateX(calc(100% + 24px));
+  transition:
+    transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1),
+    visibility 0s 0.28s;
+}
+
+/* Gouttière droite assez large : le panneau la remplit au lieu de recouvrir le site. */
+:host(.kui-docked) .kui-panel {
+  left: var(--kui-dock-left);
+  width: auto;
+}
+
+:host(.is-open) .kui-panel {
+  visibility: visible;
+  transform: none;
+  transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.kui-panel:focus {
+  outline: none;
+}
+
+/* En-tête */
+.kui-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 12px 12px 16px;
+  flex: none;
+}
+
+.kui-head .kui-glyph {
+  width: 38px;
+  height: 38px;
+  font-size: 18px;
+}
+
+.kui-brand {
+  flex: 1;
+  min-width: 0;
+}
+
+.kui-brand h1 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+.kui-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  color: var(--kui-muted);
+  font-size: 12px;
+}
+
+.kui-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--kui-gold);
+}
+
+.kui-dot.ok {
+  background: var(--kui-mint);
+  box-shadow: 0 0 0 3px rgba(70, 209, 158, 0.12);
+}
+
+.kui-head-actions {
+  display: flex;
+  gap: 3px;
+}
+
+.kui-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--kui-muted);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.kui-icon:hover {
+  background: var(--kui-raise);
+  color: var(--kui-text);
+}
+
+/* Navigation */
+.kui-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  flex: none;
+  gap: 2px;
+  overflow-x: auto;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--kui-line);
+  scrollbar-width: none;
+}
+
+.kui-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.kui-tab {
+  flex: 1 1 auto;
+  min-width: max-content;
+  padding: 9px 6px 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--kui-muted);
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.kui-tab:hover {
+  color: var(--kui-text);
+}
+
+.kui-tab.on {
+  border-color: var(--kui-brand);
+  color: var(--kui-text);
+}
+
+/* Sous-onglets (Stats, Activité) */
+.kui-subtabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--kui-line);
+}
+
+.kui-subtab {
+  padding: 6px 11px;
+  border: 1px solid var(--kui-line);
+  border-radius: 999px;
+  background: var(--kui-panel);
+  color: var(--kui-muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.kui-subtab:hover {
+  color: var(--kui-text);
+}
+
+.kui-subtab.on {
+  border-color: var(--kui-brand);
+  background: var(--kui-raise);
+  color: var(--kui-text);
+}
+
+/* Contenu */
+.kui-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  scrollbar-color: var(--kui-line) transparent;
+  scrollbar-width: thin;
+}
+
+.kui-view {
+  animation: kui-rise 0.22s ease both;
+}
+
+.kui-eyebrow {
+  margin: 0 0 4px;
+  color: var(--kui-brand-hi);
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.kui-view h2 {
+  margin: 0 0 6px;
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.kui-lead {
+  margin: 0 0 16px;
+  color: var(--kui-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.kui-card {
+  margin-bottom: 10px;
+  padding: 13px 14px;
+  border: 1px solid var(--kui-line);
+  border-radius: 13px;
+  background: var(--kui-raise);
+}
+
+.kui-card h3 {
+  margin: 0 0 5px;
+  font-size: 13.5px;
+}
+
+.kui-card p {
+  margin: 0 0 10px;
+  color: var(--kui-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.kui-list {
+  margin: 8px 0 12px;
+  padding-left: 18px;
+  color: var(--kui-muted);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.kui-list b {
+  color: var(--kui-text);
+}
+
+.kui-note {
+  margin: 0;
+  color: var(--kui-muted);
+  font-size: 11.5px;
+}
+
+/* Données chargées */
+.kui-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 28px;
+  margin-bottom: 10px;
+}
+
+.kui-data-status {
+  color: var(--kui-muted);
+  font-size: 11.5px;
+}
+
+.kui-refresh {
+  padding: 5px 9px;
+  border: 1px solid var(--kui-line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--kui-muted);
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.kui-refresh:hover:not(:disabled) {
+  border-color: var(--kui-brand);
+  color: var(--kui-text);
+}
+
+.kui-refresh:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.kui-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.kui-metric {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 10px 11px;
+  border: 1px solid var(--kui-line);
+  border-radius: 11px;
+  background: var(--kui-raise);
+}
+
+.kui-metric-label {
+  overflow: hidden;
+  color: var(--kui-muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.kui-metric strong {
+  overflow: hidden;
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kui-section-title {
+  margin: 0 0 7px;
+  color: var(--kui-muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.kui-rows {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.kui-data-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--kui-line);
+  border-radius: 10px;
+  background: rgba(43, 37, 65, 0.72);
+}
+
+.kui-data-row-action {
+  align-items: flex-start;
+}
+
+.kui-thumb {
+  width: 32px;
+  height: 48px;
+  flex: none;
+  border-radius: 6px;
+  background: var(--kui-ink);
+  object-fit: cover;
+}
+
+.kui-data-row .kui-action,
+.kui-data-row .kui-secondary {
+  flex: none;
+  margin-top: 1px;
+}
+
+.kui-row-actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+  max-width: 52%;
+}
+
+.kui-action,
+.kui-secondary {
+  padding: 5px 8px;
+  border: 1px solid var(--kui-line);
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.kui-action {
+  border-color: var(--kui-brand);
+  background: transparent;
+  color: var(--kui-brand-hi);
+}
+
+.kui-action:hover:not(:disabled),
+.kui-action.armed {
+  background: var(--kui-brand);
+  color: #fff;
+}
+
+.kui-action.armed {
+  border-color: var(--kui-gold);
+  background: var(--kui-gold);
+  color: var(--kui-ink);
+}
+
+.kui-action:disabled,
+.kui-secondary:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.kui-secondary {
+  background: transparent;
+  color: var(--kui-muted);
+}
+
+.kui-secondary:hover:not(:disabled) {
+  border-color: var(--kui-brand);
+  color: var(--kui-text);
+}
+
+.kui-pager {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 4px;
+}
+
+.kui-page {
+  min-width: 30px;
+  border: 1px solid var(--kui-line);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+
+.kui-page:hover:not(:disabled) {
+  border-color: #6f63a8;
+}
+
+.kui-page:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.kui-page.is-current {
+  border-color: #6f63a8;
+  background: #2a2540;
+  font-weight: 700;
+}
+
+.kui-quick-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.kui-search {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.kui-search-input {
+  width: 100%;
+  min-width: 0;
+  flex: 1;
+  padding: 8px 9px;
+  border: 1px solid var(--kui-line);
+  border-radius: 8px;
+  background: var(--kui-ink);
+  color: var(--kui-text);
+  font-size: 12px;
+}
+
+.kui-search-input:focus-visible {
+  outline: 2px solid var(--kui-brand-hi);
+  outline-offset: 2px;
+}
+
+.kui-search-results {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.kui-market-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 6px;
+  margin: 0 0 8px;
+}
+
+.kui-market-checks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 0 0 8px;
+  color: var(--kui-muted);
+  font-size: 10.5px;
+}
+
+.kui-market-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.kui-market-check input {
+  accent-color: var(--kui-mint);
+}
+
+.kui-market-checks .kui-action[hidden] {
+  display: none;
+}
+
+.kui-market-discount-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  color: var(--kui-muted);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.kui-market-discount {
+  width: 52px;
+  max-width: 52px;
+  flex: none;
+  padding: 6px 5px;
+  text-align: center;
+}
+
+a.kui-market-row {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* Le lien couvre la ligne sans casser la flex du conteneur, pour laisser place
+   au bouton d'action à droite. */
+a.kui-market-open {
+  display: contents;
+}
+
+.kui-market-row-wrap:hover,
+.kui-market-row-wrap:focus-within {
+  border-color: var(--kui-brand-hi);
+  background: rgba(43, 37, 65, 0.95);
+}
+
+.kui-market-add,
+.kui-market-remove {
+  flex: none;
+  padding: 5px 8px;
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.kui-market-remove {
+  color: var(--kui-muted);
+}
+
+/* Une carte possédée n'a pas de bouton : un tag discret dit pourquoi. */
+.kui-market-owned {
+  border-style: dashed;
+  color: var(--kui-muted);
+  font-size: 10.5px;
+}
+
+.kui-reprice-actions {
+  margin: 6px 0;
+}
+
+.kui-buy-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 6px 0;
+}
+
+.kui-buy-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+  border-bottom: 1px dashed var(--kui-line);
+}
+
+.kui-buy-row.is-over {
+  opacity: 0.6;
+}
+
+.kui-buy-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.kui-market-buy[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.kui-wishes-export-row {
+  margin: 6px 0;
+}
+
+.kui-buy-box {
+  margin: 10px 0;
+  padding: 8px;
+  border: 1px dashed var(--kui-line);
+  border-radius: 6px;
+}
+
+.kui-buy-recap {
+  max-height: 150px;
+  overflow: auto;
+  margin: 6px 0;
+  padding: 6px;
+  font-size: 10.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  background: var(--kui-raise);
+  border-radius: 4px;
+}
+
+.kui-market-watch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.kui-market-watch-every {
+  width: auto;
+  flex: none;
+  padding: 4px 6px;
+}
+
+.kui-market-watch-now {
+  padding: 4px 8px;
+  font-size: 10.5px;
+}
+
+.kui-market-watch-status {
+  margin: 4px 0 0;
+}
+
+.kui-market-more[hidden] {
+  display: none;
+}
+
+a.kui-market-row:hover,
+a.kui-market-row:focus-visible {
+  border-color: var(--kui-brand-hi);
+  background: rgba(43, 37, 65, 0.95);
+}
+
+.kui-market-rows {
+  margin-bottom: 8px;
+}
+
+.kui-action-feedback {
+  margin: 0 0 10px;
+  padding: 7px 9px;
+  border: 1px solid rgba(70, 209, 158, 0.35);
+  border-radius: 8px;
+  background: rgba(70, 209, 158, 0.09);
+  color: var(--kui-mint);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.kui-row-main {
+  display: grid;
+  flex: 1;
+  gap: 1px;
+  min-width: 0;
+}
+
+.kui-row-main b,
+.kui-row-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kui-row-main b {
+  font-size: 12.5px;
+}
+
+.kui-row-main small {
+  color: var(--kui-muted);
+  font-size: 11.5px;
+}
+
+/* Une annonce de marché porte série, type, échéance, écart et vendeur : deux
+   lignes, sinon l'échéance ajoutée repousse le vendeur hors du cadre. */
+.kui-market-row .kui-row-main small {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  white-space: normal;
+}
+
+.kui-chip {
+  flex: none;
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: rgba(70, 209, 158, 0.12);
+  color: var(--kui-mint);
+  font-size: 10.5px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.kui-chip-muted {
+  max-width: 150px;
+  overflow: hidden;
+  background: rgba(170, 162, 197, 0.1);
+  color: var(--kui-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kui-offers {
+  margin: 0 0 12px;
+  border: 1px solid var(--kui-line);
+  border-radius: 10px;
+  background: rgba(43, 37, 65, 0.45);
+}
+
+.kui-offers > summary {
+  padding: 9px 10px;
+  color: var(--kui-muted);
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 800;
+}
+
+.kui-offers[open] > summary {
+  border-bottom: 1px solid var(--kui-line);
+}
+
+.kui-offers > .kui-rows {
+  padding: 8px;
+}
+
+/* Annonces actives */
+.kui-listing-row {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 3px 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--kui-line);
+  border-radius: 10px;
+  background: rgba(43, 37, 65, 0.72);
+}
+
+.kui-listing-row .kui-thumb {
+  grid-row: span 2;
+}
+
+.kui-listing-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  grid-column: 2;
+}
+
+.kui-price-input {
+  width: 70px;
+  padding: 5px 6px;
+  border: 1px solid var(--kui-line);
+  border-radius: 7px;
+  background: var(--kui-ink);
+  color: var(--kui-text);
+  font: inherit;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.kui-price-input:disabled {
+  opacity: 0.5;
+}
+
+/* Réglages repliés */
+.kui-settings-box {
+  margin: 8px 0;
+  border: 1px solid var(--kui-line);
+  border-radius: 10px;
+  background: rgba(43, 37, 65, 0.45);
+}
+
+.kui-settings-box > summary {
+  padding: 7px 9px;
+  color: var(--kui-muted);
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 800;
+}
+
+.kui-settings-box[open] > summary {
+  border-bottom: 1px solid var(--kui-line);
+  color: var(--kui-text);
+}
+
+/* Trois colonnes de petites tuiles pour garder les réglages compacts. */
+.kui-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  padding: 8px;
+}
+
+.kui-field,
+.kui-check {
+  min-width: 0;
+  border: 1px solid rgba(60, 52, 87, 0.8);
+  border-radius: 8px;
+  background: rgba(20, 18, 31, 0.28);
+}
+
+.kui-field {
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  padding: 6px;
+  color: var(--kui-muted);
+  font-size: 10px;
+  line-height: 1.25;
+}
+
+.kui-field > span {
+  overflow-wrap: anywhere;
+}
+
+.kui-field .kui-select,
+.kui-field .kui-number-input {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+}
+
+.kui-number-input {
+  padding: 5px 7px;
+  border: 1px solid var(--kui-line);
+  border-radius: 7px;
+  background: var(--kui-ink);
+  color: var(--kui-text);
+  font: inherit;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.kui-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  padding: 6px;
+  color: var(--kui-muted);
+  font-size: 10px;
+  line-height: 1.25;
+}
+
+.kui-check span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.kui-check input {
+  flex: none;
+  margin: 1px 0 0;
+  accent-color: var(--kui-brand);
+}
+
+.kui-field .kui-search-input,
+.kui-field .kui-number-input,
+.kui-field .kui-select {
+  font-size: 10.5px;
+}
+
+.kui-field .kui-number-input,
+.kui-field .kui-select {
+  padding: 4px 5px;
+}
+
+.kui-settings-box .kui-note {
+  padding: 0 8px 8px;
+  font-size: 10.5px;
+}
+
+.kui-result-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.kui-profile-box:not(:empty) {
+  margin-bottom: 12px;
+}
+
+.kui-profile {
+  padding: 10px;
+  border: 1px solid var(--kui-line);
+  border-radius: 10px;
+  background: rgba(43, 37, 65, 0.72);
+}
+
+.kui-profile-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.kui-profile .kui-metrics {
+  margin-bottom: 8px;
+}
+
+/* Activité */
+.kui-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 54px;
+  margin-bottom: 14px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--kui-line);
+}
+
+.kui-bar {
+  flex: 1;
+  min-width: 2px;
+  border-radius: 3px 3px 0 0;
+  background: linear-gradient(180deg, var(--kui-brand-hi), var(--kui-brand));
+  opacity: 0.85;
+}
+
+.kui-activity-log {
+  display: grid;
+  gap: 5px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.kui-activity-entry {
+  display: grid;
+  gap: 1px;
+  padding: 6px 8px;
+  border-left: 2px solid var(--kui-line);
+  background: rgba(43, 37, 65, 0.4);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.kui-activity-entry small {
+  color: var(--kui-muted);
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.kui-activity-entry.is-sale {
+  border-left-color: var(--kui-mint);
+}
+
+.kui-activity-entry.is-warn {
+  border-left-color: var(--kui-gold);
+}
+
+/* Tableau Stats */
+.kui-sort-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 14px 0 8px;
+  color: var(--kui-muted);
+  font-size: 11px;
+}
+
+.kui-sort-bar > span {
+  margin-right: auto;
+}
+
+.kui-select {
+  max-width: 110px;
+  padding: 5px 6px;
+  border: 1px solid var(--kui-line);
+  border-radius: 7px;
+  background: var(--kui-ink);
+  color: var(--kui-text);
+  font: inherit;
+  font-size: 11px;
+}
+
+.kui-stats-board {
+  overflow: hidden;
+  margin-bottom: 10px;
+  border: 1px solid var(--kui-line);
+  border-radius: 11px;
+  background: rgba(43, 37, 65, 0.72);
+}
+
+.kui-stats-head,
+.kui-stats-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px 76px 42px;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 10px;
+}
+
+.kui-stats-head {
+  color: var(--kui-muted);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.kui-stats-head span:not(:first-child),
+.kui-stats-number {
+  overflow: hidden;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kui-stats-item + .kui-stats-item {
+  border-top: 1px solid var(--kui-line);
+}
+
+.kui-stats-row {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--kui-text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+
+.kui-stats-row:hover,
+.kui-stats-row.is-open {
+  background: rgba(255, 77, 46, 0.07);
+}
+
+.kui-stats-account {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.kui-stats-name {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.kui-stats-name b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kui-stats-name small {
+  color: var(--kui-mint);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.kui-avatar {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--kui-ink);
+  object-fit: cover;
+}
+
+.kui-avatar-fallback {
+  display: inline-grid;
+  place-items: center;
+  color: var(--kui-brand-hi);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.kui-stats-detail {
+  padding: 2px 10px 10px 41px;
+  background: rgba(15, 13, 21, 0.28);
+}
+
+.kui-stats-pairs {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 9px;
+}
+
+.kui-stats-pairs > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+}
+
+.kui-stats-pairs span {
+  color: var(--kui-muted);
+}
+
+.kui-stats-pairs b {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.kui-stats-actions {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.kui-data-loading,
+.kui-data-error {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.kui-data-loading {
+  color: var(--kui-muted);
+}
+
+.kui-data-error {
+  color: #ff9a8c;
+}
+
+.kui-data-body > .kui-note + .kui-note {
+  margin-top: 8px;
+}
+
+.kui-search + .kui-search-results:empty {
+  display: none;
+}
+
+/* Pied */
+.kui-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex: none;
+  padding: 10px 16px 13px;
+  border-top: 1px solid var(--kui-line);
+  color: var(--kui-muted);
+  font-size: 11px;
+}
+
+.kui-foot span:last-child {
+  text-align: right;
+}
+
+@keyframes kui-rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@media (max-width: 720px) {
+  .kui-panel {
+    top: 8px;
+    right: 8px;
+    bottom: 8px;
+    left: 8px;
+    width: auto;
+  }
+
+  .kui-launcher {
+    top: 8px;
+    right: 8px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kui-launcher,
+  .kui-panel,
+  .kui-view {
+    animation: none;
+    transition: none;
+  }
+}
+
+.kui-album-row {
+  gap: 8px;
+}
+
+.kui-album-open {
+  width: 100%;
+  border: 1px solid transparent;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.kui-album-open:hover,
+.kui-album-open:focus-visible {
+  border-color: var(--kui-line);
+  background: var(--kui-raise);
+}
+
+.kui-album-open.is-small {
+  opacity: 0.6;
+}
+
+.kui-album-tags {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.kui-chip.is-reward {
+  border: 1px solid var(--kui-gold);
+  background: rgba(242, 193, 78, 0.14);
+  color: var(--kui-gold);
+}
+
+.kui-chip.is-wish {
+  color: var(--kui-gold);
+}
+
+.kui-album-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.kui-album-tools .kui-search {
+  flex: 1;
+  min-width: 140px;
+}
+
+.kui-album-card {
+  gap: 10px;
+}
+
+.kui-album-card.is-owned {
+  opacity: 0.72;
+}
+
+.kui-album-detail .kui-secondary {
+  margin-bottom: 8px;
+}
+
+.kui-buy-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  margin: 8px 0 10px;
+}
+
+.kui-buy-tools .kui-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  margin: 0;
+}
+
+.kui-buy-strategies {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.kui-buy-strategies .kui-subtab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.kui-buy-strategies .kui-order-fixed {
+  width: 64px;
+  min-height: 24px;
+  padding: 2px 6px;
+}
+
+.kui-order-prices {
+  display: block;
+  margin: 8px 0;
+}
+
+.kui-order-prices > span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--kui-muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.kui-order-delay-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.kui-order-delay {
+  width: 58px;
+}
+
+.kui-order-price {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  color: var(--kui-muted);
+  font-size: 11px;
+}
+
+.kui-order-price .kui-number-input {
+  width: 72px;
+}
+
+.kui-buy-view .kui-field > span {
+  white-space: nowrap;
+}
+
+.kui-buy-strategies .kui-subtab {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.kui-buy-strategies .kui-order-fixed {
+  width: 52px;
+  min-height: 22px;
+  padding: 1px 4px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.18);
+  color: var(--kui-text);
+}
+
+.kui-buy-view .kui-data-row input[type='checkbox'] {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--kui-brand);
+}
+
+.kui-buy-view .kui-number-input {
+  width: 96px;
+}
+
+.kui-album-bar {
+  flex: 0 0 96px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--kui-line);
+  overflow: hidden;
+}
+
+.kui-album-fill {
+  display: block;
+  height: 100%;
+  background: var(--kui-mint);
+}
+
+.kui-showcase {
+  max-height: 180px;
+  overflow: auto;
+  margin: 6px 0;
+  padding: 6px;
+  font-size: 10.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  background: var(--kui-raise);
+  border-radius: 4px;
+}
+
+.kui-rn-row .kui-row-main small + small {
+  color: var(--kui-muted);
+}
+
+.kui-conditions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kui-condition {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.kui-condition-mark {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  background: rgba(255, 90, 60, .16);
+  color: var(--kui-brand);
+}
+
+.kui-condition.is-ok .kui-condition-mark {
+  background: rgba(70, 209, 158, .16);
+  color: var(--kui-mint);
+}
+
+.kui-note.kui-ok {
+  color: var(--kui-mint);
+}.kui-metric.is-partial strong {
+  color: var(--kui-gold);
+}
+
+.kui-packs-block {
+  margin-top: 12px;
+}
+
+.kui-pack-row {
+  align-items: center;
+}
+
+.kui-pack-row.is-best {
+  border-color: rgba(70, 209, 158, 0.45);
+}
+
+.kui-pack-best {
+  margin-left: 6px;
+  border-color: rgba(70, 209, 158, 0.5);
+  color: var(--kui-mint, #46d19e);
+  font-size: 9.5px;
+  text-transform: uppercase;
+}
+
+.kui-pack-reco {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 12px;
+  padding: 12px;
+  border: 1px solid rgba(70, 209, 158, 0.4);
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(70, 209, 158, 0.1), transparent 70%);
+}
+
+.kui-pack-reco-title {
+  font-size: 15px;
+}
+
+.kui-pack-reco p {
+  margin: 0;
+}
+
+.kui-pack-paid {
+  margin-top: 10px;
+}
+
+.kui-pack-paid > summary {
+  cursor: pointer;
+  color: var(--kui-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.kui-pack-paid .kui-data-row {
+  margin-top: 6px;
+}
+
+.kui-advisor-block {
+  margin-top: 12px;
+}
+
+.kui-advisor-block > .kui-secondary {
+  margin-bottom: 8px;
+}
+
+.kui-advisor-row .kui-chip.is-vendre {
+  color: var(--kui-mint);
+}
+
+.kui-advisor-row .kui-chip.is-ordre {
+  color: var(--kui-gold);
+}
+
+.kui-advisor-row .kui-chip.is-error {
+  color: var(--kui-brand);
+}
+
+.kui-deal-row .kui-chip.is-deal {
+  color: var(--kui-mint);
+}
+
+.kui-deal-row .kui-chip.is-recycle {
+  color: var(--kui-gold);
+}
