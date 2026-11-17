@@ -2,14 +2,14 @@ import { storage } from 'wxt/utils/storage';
 
 /**
  * Vérification de mise à jour : `runtime.requestUpdateCheck` (Chrome) quand il existe,
- * résultat gardé six heures. Aucune requête réseau maison, donc aucune permission en plus ;
- * les liens de publication restent vides tant que l'extension n'est pas publiée.
+ * résultat gardé six heures. Aucune requête réseau maison, donc aucune permission en plus.
+ * Sous Firefox, les mises à jour de la fiche AMO sont prises en charge par le navigateur.
  */
 
 export const REPO_URL = 'https://github.com/Maxray0/Kyara-Plus';
 
-/** À renseigner le jour de la publication, avec l'URL exacte de la fiche. */
-export const AMO_URL = '';
+/** Fiche AMO publiée : les mises à jour Firefox sont ensuite gérées par le navigateur. */
+export const AMO_URL = 'https://addons.mozilla.org/fr/firefox/addon/kyara-plus/';
 export const CHROME_STORE_URL = '';
 
 export const UPDATE_CHECK_TTL_MS = 6 * 60 * 60 * 1000;
