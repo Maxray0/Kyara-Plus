@@ -46,6 +46,57 @@ export const MARKET_PAGE_SIZE = 48;
 export const MARKET_MAX_PAGES = 8;
 /** Pause entre deux pages : le site coupe l'accès après une rafale. */
 export const MARKET_PAGE_DELAY_MS = 600;
+/**
+ * Annonces gardées en mémoire au plus par recherche. « Tout lire » parcourt des dizaines de
+ * milliers d'annonces ; les garder toutes faisait tomber l'onglet. Les meilleures affaires
+ * restent, la couverture affichée continue de compter tout ce qui a été lu.
+ */
+export const MARKET_KEPT_MAX = 300;
+/** Durée de validité d'une lecture d'envie, pour ne pas la refaire au bouton « Lire la suite ». */
+export const WISH_CARD_CACHE_TTL_MS = 10 * 60_000;
+
+const defaultWait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** Attend un délai, sans bloquer une annulation demandée entre-temps. */
+async function waitUnlessAbort(
+  ms: number,
+  wait: ((ms: number) => Promise<void>) | undefined,
+  signal?: AbortSignal,
+): Promise<void> {
+  const sleeping = wait ? wait(ms) : defaultWait(ms);
+  if (!signal) {
+    await sleeping;
+    return;
+  }
+  if (signal.aborted) return;
+  await Promise.race([
+    sleeping,
+    new Promise<void>((resolve) => {
+      const onAbort = (): void => resolve();
+      signal.addEventListener('abort', onAbort, { once: true });
+      void sleeping.then(() => signal.removeEventListener('abort', onAbort));
+    }),
+  ]);
+}
+
+/** Ordre « meilleure affaire d'abord », sans filtre : sert à ne garder que le haut de liste. */
+function bestFirst(a: MarketListing, b: MarketListing): number {
+  const left = listingDiscount(a);
+  const right = listingDiscount(b);
+  if (left === null && right === null) return a.price - b.price;
+  if (left === null) return 1;
+  if (right === null) return -1;
+  return left - right || a.price - b.price;
+}
+
+/** Tronque une liste en gardant les meilleures affaires. */
+export function keepBest(
+  listings: readonly MarketListing[],
+  max = MARKET_KEPT_MAX,
+): MarketListing[] {
+  if (listings.length <= max) return [...listings];
+  return [...listings].sort(bestFirst).slice(0, Math.max(1, Math.trunc(max)));
+}
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value);
@@ -207,8 +258,11 @@ export interface MarketSearchOptions extends DealFilters {
   startPage?: number;
   /** Pause entre deux pages, injectable pour les tests. */
   wait?: (ms: number) => Promise<void>;
+  /** Annulation : la lecture s'arrête entre deux pages et rend ce qu'elle a lu. */
+  signal?: AbortSignal;
   /** Annonce signalée au fil de la lecture, pour afficher la progression. */
-  onPage?: (listings: readonly MarketListing[], page: number) => void;
+  /** Appelée après chaque page ; `total` est le total annoncé par le site. */
+  onPage?: (listings: readonly MarketListing[], page: number, total: number | null) => void;
 }
 
 export interface MarketSearchResult {
@@ -218,8 +272,14 @@ export interface MarketSearchResult {
   pages: number;
   /** Faux quand la lecture s'est arrêtée avant la dernière page connue. */
   complete: boolean;
+  /** Emplacements d'annonces lus (pages × taille de page), pour la couverture. */
+  scanned?: number;
   /** Renseigné quand la lecture s'est faite envie par envie. */
   cards?: CardSearchSummary;
+  /** Vrai quand l'utilisateur a arrêté la lecture. */
+  aborted?: boolean;
+  /** Annonces lues mais écartées pour rester sous `MARKET_KEPT_MAX`. */
+  dropped?: number;
 }
 
 /** Une carte de la liste d'envies, réduite à ce qu'il faut pour la chercher. */
@@ -314,8 +374,53 @@ export interface CardSearchOptions extends DealFilters, WishCardCriteria {
   startPage?: number;
   /** Pause entre deux envies, injectable pour les tests. */
   wait?: (ms: number) => Promise<void>;
+  /** Annulation : la lecture s'arrête entre deux envies et rend ce qu'elle a lu. */
+  signal?: AbortSignal;
+  /** Horloge injectable, pour la validité du cache par carte. */
+  now?: () => number;
+  /** Faux pour relire le site sans servir le cache (bouton « Actualiser »). */
+  useCache?: boolean;
   /** Progression : nombre d'envies lues et total de la liste. */
   onCard?: (read: number, total: number) => void;
+}
+
+/**
+ * Dernières lectures par envie : une passe qui prolonge la précédente ne repaie pas
+ * les mêmes requêtes. Le cache vit en mémoire (10 min) et ne sert jamais au-delà.
+ */
+const cardCache = new Map<string, { at: number; listings: MarketListing[] }>();
+
+/** Identifiant de portée par client API : deux contextes ne partagent pas leurs lectures. */
+const apiScopes = new WeakMap<object, number>();
+let scopeSequence = 0;
+
+function scopeOf(api: object): number {
+  const known = apiScopes.get(api);
+  if (known !== undefined) return known;
+  scopeSequence += 1;
+  apiScopes.set(api, scopeSequence);
+  return scopeSequence;
+}
+
+export function clearWishCardCache(): void {
+  cardCache.clear();
+}
+
+export function wishCardCacheSize(): number {
+  return cardCache.size;
+}
+
+function cardCacheKey(api: object, card: WishCardRef, options: CardSearchOptions): string {
+  return [
+    scopeOf(api),
+    card.id,
+    card.name.toLocaleLowerCase(),
+    options.sort ?? '',
+    options.buyNow ? 'b' : '',
+    options.missing ? 'm' : '',
+    Math.trunc(options.pagesPerCard ?? WISH_PAGES_PER_CARD),
+    Math.trunc(options.pageSize ?? MARKET_PAGE_SIZE),
+  ].join('|');
 }
 
 export interface CardSearchSummary {
@@ -348,6 +453,8 @@ export async function searchMarketCards(
   const maxCards = Math.max(1, options.maxCards ?? WISH_CARDS_PER_PASS);
   const start = Math.max(1, Math.trunc(options.startPage ?? 1));
   const wait = options.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const clock = options.now ?? Date.now;
+  const cacheAllowed = options.useCache !== false;
 
   const named = new Map<number, WishCardRef>();
   for (const card of cards) {
@@ -366,12 +473,27 @@ export async function searchMarketCards(
   const saturated: string[] = [];
   let read = Math.min(start - 1, total);
   let failures = 0;
+  let aborted = false;
 
   for (const [index, card] of slice.entries()) {
+    if (options.signal?.aborted) {
+      aborted = true;
+      break;
+    }
+    // Lecture récente de cette envie : on la réutilise au lieu de repayer trois pages.
+    const key = cardCacheKey(api, card, { ...options, pagesPerCard, pageSize });
+    const cached = cacheAllowed && start === 1 ? cardCache.get(key) : undefined;
+    if (cached && clock() - cached.at < WISH_CARD_CACHE_TTL_MS) {
+      for (const listing of cached.listings) found.set(listing.id, listing);
+      read = start + index;
+      options.onCard?.(read, total);
+      continue;
+    }
     let seen = 0;
     let annonceTotal = 0;
     let complet = false;
     let failed = false;
+    const cardListings: MarketListing[] = [];
     for (let page = 1; page <= pagesPerCard; page += 1) {
       let pageListings: MarketListing[];
       try {
@@ -399,26 +521,43 @@ export async function searchMarketCards(
         break;
       }
       for (const listing of pageListings) {
-        if (listing.characterId === card.id) found.set(listing.id, listing);
+        if (listing.characterId !== card.id) continue;
+        found.set(listing.id, listing);
+        cardListings.push(listing);
       }
       seen += pageListings.length;
       complet = pageListings.length < pageSize || (annonceTotal > 0 && seen >= annonceTotal);
       if (complet || page === pagesPerCard) break;
-      await wait(MARKET_PAGE_DELAY_MS);
+      await waitUnlessAbort(MARKET_PAGE_DELAY_MS, wait, options.signal);
+      if (options.signal?.aborted) break;
     }
     // Ce qui reste au-delà des pages lues : à signaler dans le statut.
     if (!complet && !failed) saturated.push(card.name);
+    if (start === 1 && !failed && !options.signal?.aborted) {
+      cardCache.set(key, { at: clock(), listings: cardListings });
+      if (cardCache.size > MARKET_KEPT_MAX) {
+        const oldest = [...cardCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+        if (oldest) cardCache.delete(oldest[0]);
+      }
+    }
     read = start + index;
     options.onCard?.(read, total);
-    if (index < slice.length - 1) await wait(MARKET_PAGE_DELAY_MS);
+    if (index < slice.length - 1) {
+      await waitUnlessAbort(MARKET_PAGE_DELAY_MS, wait, options.signal);
+      if (options.signal?.aborted) aborted = true;
+    }
   }
 
+  const merged = rankDeals([...found.values()], options);
+  const listings = keepBest(merged);
   return {
-    listings: rankDeals([...found.values()], options),
+    listings,
     total: null,
     pages: read,
-    complete: read >= total,
+    complete: read >= total && !aborted,
     cards: { read, total, skipped, failures, saturated },
+    aborted,
+    dropped: merged.length - listings.length,
   };
 }
 
@@ -439,8 +578,13 @@ export async function searchMarket(
   const listings: MarketListing[] = [];
   let total: number | null = null;
   let pages = 0;
+  let aborted = false;
 
   for (let page = start; page < start + maxPages; page += 1) {
+    if (options.signal?.aborted) {
+      aborted = true;
+      break;
+    }
     const result = await call(api, marketSearchPath(query, page, pageSize));
     if (!result.ok) throw new Error(`Marché : ${result.message}`);
     const data = result.data;
@@ -455,19 +599,33 @@ export async function searchMarket(
       return true;
     });
     listings.push(...fresh);
-    options.onPage?.(fresh, page);
+    // « Tout lire » ne fait plus grossir la mémoire sans fin : le haut de liste suffit.
+    if (listings.length > MARKET_KEPT_MAX) {
+      listings.splice(0, listings.length, ...keepBest(listings));
+    }
+    options.onPage?.(fresh, page, total);
     const done = !pageListings.length || (total !== null && seen.size >= total);
     if (done) break;
-    if (page < start + maxPages - 1) await wait(MARKET_PAGE_DELAY_MS);
+    if (page < start + maxPages - 1) {
+      await waitUnlessAbort(MARKET_PAGE_DELAY_MS, wait, options.signal);
+      if (options.signal?.aborted) {
+        aborted = true;
+        break;
+      }
+    }
   }
 
   // Les pages précédentes d'une lecture prolongée comptent dans la couverture.
   const scanned = (start - 1) * pageSize + seen.size;
+  const ranked = rankDeals(listings, options);
   return {
-    listings: rankDeals(listings, options),
+    listings: ranked,
     total,
     pages,
     complete: total === null ? pages - start + 1 < maxPages : scanned >= total,
+    scanned,
+    aborted,
+    dropped: Math.max(0, seen.size - ranked.length),
   };
 }
 
@@ -484,11 +642,17 @@ export function mergeSearchResults(
   const byId = new Map<string, MarketListing>();
   for (const listing of previous?.listings ?? []) byId.set(listing.id, listing);
   for (const listing of next.listings) byId.set(listing.id, listing);
+  const ranked = rankDeals([...byId.values()], filters);
+  const listings = keepBest(ranked);
   return {
-    listings: rankDeals([...byId.values()], filters),
+    listings,
     total: next.total ?? previous?.total ?? null,
     pages: next.pages,
     complete: next.complete,
+    scanned: next.scanned ?? previous?.scanned ?? 0,
+    aborted: next.aborted === true,
+    dropped:
+      (previous?.dropped ?? 0) + (next.dropped ?? 0) + Math.max(0, ranked.length - listings.length),
     cards: next.cards
       ? {
           ...next.cards,
@@ -496,4 +660,34 @@ export function mergeSearchResults(
         }
       : previous?.cards,
   };
+}
+
+/**
+ * Estimation du temps restant d'une passe : le débit se mesure sur les pages lues
+ * DANS cette passe. En prolongement (« Lire la suite »), les pages déjà lues avant
+ * la passe ne comptent ni dans le débit ni dans le temps écoulé, sinon l'estimation
+ * serait sous-estimée.
+ */
+export function estimatePassRemaining(options: {
+  page: number;
+  startPage: number;
+  total: number | null;
+  elapsedMs: number;
+  pageSize?: number;
+}): { scanned: number; remainingMs: number } {
+  const pageSize = Math.max(1, Math.trunc(options.pageSize ?? MARKET_PAGE_SIZE));
+  const start = Math.max(1, Math.trunc(options.startPage));
+  const page = Math.max(start, Math.trunc(options.page));
+  const passScanned = (page - start + 1) * pageSize;
+  const before = (start - 1) * pageSize;
+  const scanned =
+    options.total === null
+      ? before + passScanned
+      : Math.min(Math.max(0, options.total), before + passScanned);
+  const elapsed = Math.max(1, options.elapsedMs);
+  const remainingMs =
+    options.total !== null && options.total > scanned
+      ? ((options.total - scanned) * elapsed) / passScanned
+      : 0;
+  return { scanned, remainingMs };
 }

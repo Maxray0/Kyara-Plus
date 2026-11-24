@@ -26,7 +26,6 @@ export interface Cost {
   chakra: number;
 }
 
-export const SOFT_CAP = 9;
 export const REGEN_MIN = 10;
 export const DEFAULT_STACK_MAX = 10;
 
@@ -165,25 +164,26 @@ export function applyCost(
 
 export interface DelayRange {
   immediate: boolean;
-  maxMin: number;
+  /** Minutes à attendre avant le prochain booster gratuit (0 si ouverture immédiate). */
+  waitMin: number;
 }
 
 /**
- * Cadence : T_max = (9 − B) × I + R, avec B boosters dans la jauge, I = 10 min et R le temps
- * restant avant le prochain gain. Jauge pleine ou T_max sous la minute : ouverture immédiate.
+ * Cadence : un booster gratuit arrive toutes les 10 min. Tant qu'il en reste un, il s'ouvre
+ * tout de suite (aucune raison d'attendre) ; sinon on attend exactement le prochain, d'après
+ * `nextFreeAt`, ou 10 min quand le serveur ne donne pas d'heure.
  */
 export function delayRange(account: Account, now: number): DelayRange {
-  const boosters = Math.min(account.freePacksMax, account.freePacks);
-  const remaining =
-    account.nextFreeAt === null ? REGEN_MIN : Math.max(0, (account.nextFreeAt - now) / 60_000);
-  const maxMin = Math.floor(Math.max(0, SOFT_CAP - boosters) * REGEN_MIN + remaining);
-  return { immediate: boosters >= account.freePacksMax || maxMin < 1, maxMin };
+  if (account.freePacks + account.bonusPacks > 0) return { immediate: true, waitMin: 0 };
+  if (account.nextFreeAt === null) return { immediate: false, waitMin: REGEN_MIN };
+  const remaining = (account.nextFreeAt - now) / 60_000;
+  if (remaining <= 0) return { immediate: true, waitMin: 0 };
+  return { immediate: false, waitMin: Math.max(1, Math.ceil(remaining)) };
 }
 
-/** Délai tiré au hasard : un nombre entier de minutes entre 1 et T_max. */
-export function nextDelayMs(range: DelayRange, random: () => number): number {
-  if (range.immediate) return 0;
-  return (1 + Math.floor(random() * range.maxMin)) * 60_000;
+/** Attente jusqu'au prochain booster gratuit ; zéro quand un booster est déjà disponible. */
+export function nextDelayMs(range: DelayRange): number {
+  return range.immediate ? 0 : range.waitMin * 60_000;
 }
 
 const STOP_TEXT: Record<string, string> = {

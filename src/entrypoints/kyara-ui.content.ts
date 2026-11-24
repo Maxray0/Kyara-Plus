@@ -2,13 +2,8 @@ import { createApiClient } from '@/lib/api';
 import { createAlertBell } from '@/lib/alerts/bell';
 import { mountSiteAlertBell } from '@/lib/alerts/site';
 import { readPageSession } from '@/lib/auth';
-import type { ExtensionPage } from '@/lib/messages';
-import { createPanel } from '@/lib/ui/panel';
+import { createPanel, type PanelController } from '@/lib/ui/panel';
 import { createPanelViews } from '@/lib/ui/panel-views';
-
-function openPage(page: ExtensionPage): void {
-  void browser.runtime.sendMessage({ type: 'ui:open', page }).catch(() => {});
-}
 
 export default defineContentScript({
   matches: ['https://kyara.games/*'],
@@ -22,10 +17,13 @@ export default defineContentScript({
 
     const alertBell = createAlertBell();
     mountSiteAlertBell({ document });
-    createPanel({
+    // Tout est centralisé dans le panneau : l'engrenage ouvre l'onglet Réglages au lieu
+    // du popup de la barre d'outils, qui reste disponible pour un accès rapide.
+    const current: { panel?: PanelController } = {};
+    current.panel = createPanel({
       tagline: 'Vente · échanges · statistiques',
       alertBell: alertBell.element,
-      onSettings: () => openPage('popup'),
+      onSettings: () => current.panel?.openView('settings'),
       getStatus: () => {
         try {
           const connected = Boolean(readPageSession(window.localStorage));

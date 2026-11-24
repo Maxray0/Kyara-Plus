@@ -15,6 +15,7 @@ export const BACKUP_KEYS = [
   'tradeSettings',
   'buyPlan',
   'buyOrders',
+  'orderQueue',
   'buyAutoSettings',
   'marketWatch',
   'repriceSettings',
@@ -77,6 +78,43 @@ export function backupSummary(backup: Backup): string {
 
 export function backupJson(backup: Backup): string {
   return JSON.stringify(backup, null, 2);
+}
+
+/**
+ * Caches de travail effaçables sans toucher aux réglages, aux journaux ni aux ventes.
+ * Le catalogue et les prix se relisent tout seuls ; la duplication et les opportunités
+ * se recalculent. `kyara-plus:prices:v1` vit hors du préfixe `local:` (cache Better Kyara).
+ */
+export const CACHE_KEYS = [
+  'catalog',
+  'sellPrices',
+  'wish-owned',
+  'wishlist',
+  'duplicateScan',
+  'opportunities',
+  'duplicateScanAt',
+] as const;
+
+/** Clés hors préfixe local, effacées avec les mêmes précautions. */
+export const RAW_CACHE_KEYS = ['kyara-plus:prices:v1'] as const;
+
+/** Efface les caches de travail ; renvoie le nombre de clés réellement retirées. */
+export async function clearCaches(): Promise<number> {
+  let removed = 0;
+  for (const key of CACHE_KEYS) {
+    const path = `local:${key}` as const;
+    const present = await storage.getItem(path).catch(() => null);
+    if (present === null || present === undefined) continue;
+    await storage.removeItem(path).catch(() => undefined);
+    removed += 1;
+  }
+  for (const key of RAW_CACHE_KEYS) {
+    const present = await storage.getItem(key as never).catch(() => null);
+    if (present === null || present === undefined) continue;
+    await storage.removeItem(key as never).catch(() => undefined);
+    removed += 1;
+  }
+  return removed;
 }
 
 /** Lit les clés connues du stockage local. */

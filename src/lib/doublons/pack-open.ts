@@ -15,6 +15,8 @@ export const PACK_OPEN_TIMEOUT_MS = 45_000;
 export interface PackOpenCard {
   name: string;
   rarity: string | null;
+  /** Identifiant de la carte chez Kyara, quand la réponse le donne (sert à l'image). */
+  id: number | null;
 }
 
 export interface PackOpenResult {
@@ -47,7 +49,12 @@ export function openCards(data: unknown): PackOpenCard[] {
       const name = character.name ?? card.name;
       if (typeof name !== 'string' || !name.trim()) continue;
       const rarity = character.rarity ?? card.rarity;
-      cards.push({ name: name.trim(), rarity: typeof rarity === 'string' ? rarity : null });
+      const id = Number(character.id ?? card.characterId ?? card.id);
+      cards.push({
+        name: name.trim(),
+        rarity: typeof rarity === 'string' ? rarity : null,
+        id: Number.isInteger(id) && id > 0 ? id : null,
+      });
     }
   }
   return cards;

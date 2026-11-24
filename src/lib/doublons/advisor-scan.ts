@@ -51,7 +51,22 @@ export interface DuplicateScanOptions {
   wait?: (ms: number) => Promise<void>;
   onProgress?: (done: number, total: number) => void;
   onRow?: (row: DuplicateRow) => void;
+  /** Cartes analysées en même temps (2 par défaut, borné à 4). */
+  concurrency?: number;
+  /** Lignes d'une analyse précédente, reprises sans relire les cartes encore fraîches. */
+  previous?: readonly DuplicateRow[];
+  /** Date de l'analyse précédente : au-delà de `freshMs`, rien n'est repris. */
+  previousAt?: number;
+  /** Fraîcheur acceptée pour une ligne reprise (5 min par défaut). */
+  freshMs?: number;
+  /** Horloge injectable, pour la fraîcheur de la reprise. */
+  now?: () => number;
 }
+
+/** Cartes traitées en parallèle : deux suffisent à masquer la latence sans rafale. */
+export const SCAN_CONCURRENCY = 2;
+/** Reprise : une ligne analysée il y a moins de cinq minutes n'est pas relue. */
+export const SCAN_FRESH_MS = 5 * 60_000;
 
 const RARITY_ORDER: Record<string, number> = { C: 1, U: 2, R: 3, E: 4, L: 5, M: 6 };
 
@@ -108,49 +123,99 @@ export async function scanDuplicates(
   }
   const listed = new Map<number, number>();
   for (const listing of market.active) {
-    listed.set(listing.characterId, (listed.get(listing.characterId) ?? 0) + 1);
+    // Une annonce peut engager plusieurs exemplaires : les compter tous, sinon `spare`
+    // proposerait de remettre en vente une copie déjà en ligne.
+    const qty = Math.max(1, Math.trunc(Number(listing.qty ?? 1)) || 1);
+    listed.set(listing.characterId, (listed.get(listing.characterId) ?? 0) + qty);
   }
 
   const rows = duplicateBase(collection.owned, collection.blocked, listed, meta);
   const total = rows.length;
+  const now = options.now ?? Date.now;
+  const previousAt = options.previousAt ?? 0;
+  const freshMs = options.freshMs ?? SCAN_FRESH_MS;
+  const concurrency = Math.max(1, Math.min(4, Math.trunc(options.concurrency ?? SCAN_CONCURRENCY)));
   let done = 0;
   let errors = 0;
   let stopped = false;
   options.onProgress?.(0, total);
 
-  for (const row of rows) {
-    if (options.signal?.aborted) {
-      stopped = true;
-      break;
+  // Reprise : une ligne analysée il y a moins de cinq minutes est reprise telle quelle,
+  // donc une analyse interrompue ne relit pas ce qu'elle avait déjà chiffré.
+  const reusable = new Map<number, DuplicateRow>();
+  if (options.previous?.length && previousAt > 0 && now() - previousAt <= freshMs) {
+    for (const row of options.previous) {
+      if (row.advice && !row.error) reusable.set(row.id, row);
     }
-    try {
-      const [prices, competition, orders] = await Promise.all([
-        fetchPriceSnapshot(api, row.id),
-        fetchCompetition(api, row.id),
-        fetchBuyOrders(api, row.id),
-      ]);
-      const activeListings =
-        competition.activeListings === null
-          ? null
-          : Math.max(0, competition.activeListings - row.listed);
-      row.advice = adviseSell({
-        rarity: row.rarity,
-        prices,
-        lowestAsk: competition.lowestAsk,
-        activeListings,
-        bestBid: bestBid(orders),
-        recycle: config.recycle,
-        rules: config.rules,
-      });
-    } catch (error) {
-      errors += 1;
-      row.error = error instanceof Error ? error.message : String(error);
-    }
-    done += 1;
-    options.onRow?.(row);
-    options.onProgress?.(done, total);
-    if (pauseMs > 0 && !options.signal?.aborted) await wait(pauseMs);
   }
+  const ready = new Array<boolean>(rows.length).fill(false);
+  for (const [index, row] of rows.entries()) {
+    const cached = reusable.get(row.id);
+    if (!cached) continue;
+    row.advice = cached.advice;
+    ready[index] = true;
+  }
+
+  // Les lignes sortent toujours dans l'ordre de la liste, même analysées en parallèle.
+  let flush = 0;
+  const emit = (): void => {
+    while (flush < rows.length && ready[flush]) {
+      const row = rows[flush];
+      if (row) options.onRow?.(row);
+      done += 1;
+      options.onProgress?.(done, total);
+      flush += 1;
+    }
+  };
+  emit();
+
+  let next = 0;
+  const analyze = async (row: DuplicateRow): Promise<void> => {
+    const [prices, competition, orders] = await Promise.all([
+      fetchPriceSnapshot(api, row.id),
+      fetchCompetition(api, row.id),
+      fetchBuyOrders(api, row.id),
+    ]);
+    const activeListings =
+      competition.activeListings === null
+        ? null
+        : Math.max(0, competition.activeListings - row.listed);
+    row.advice = adviseSell({
+      rarity: row.rarity,
+      prices,
+      lowestAsk: competition.lowestAsk,
+      activeListings,
+      bestBid: bestBid(orders),
+      recycle: config.recycle,
+      rules: config.rules,
+    });
+  };
+
+  const worker = async (): Promise<void> => {
+    while (!stopped) {
+      if (options.signal?.aborted) {
+        stopped = true;
+        return;
+      }
+      const index = next;
+      next += 1;
+      if (index >= rows.length) return;
+      const row = rows[index];
+      if (!row || ready[index]) continue;
+      try {
+        await analyze(row);
+      } catch (error) {
+        errors += 1;
+        row.error = error instanceof Error ? error.message : String(error);
+      }
+      ready[index] = true;
+      emit();
+      if (pauseMs > 0 && !options.signal?.aborted) await wait(pauseMs);
+    }
+  };
+
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+  if (options.signal?.aborted) stopped = true;
 
   return { rows, total, errors, config, stopped };
 }

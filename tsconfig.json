@@ -5,7 +5,7 @@
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
-    "types": ["node"]
+    "types": ["node", "vitest/globals"]
   },
-  "include": [".wxt/wxt.d.ts", "src", "*.ts"]
+  "include": [".wxt/wxt.d.ts", "src", "tests", "*.ts"]
 }

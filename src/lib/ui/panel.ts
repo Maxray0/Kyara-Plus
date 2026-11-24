@@ -29,6 +29,8 @@ export interface PanelController {
   host: HTMLElement;
   root: ShadowRoot;
   open: () => void;
+  /** Ouvre le tiroir sur une vue précise, par exemple depuis l'engrenage. */
+  openView: (id: string) => void;
   close: () => void;
   toggle: () => void;
   destroy: () => void;
@@ -329,6 +331,10 @@ export function createPanel(options: PanelOptions): PanelController {
     host,
     root,
     open: () => setOpen(true),
+    openView: (id: string) => {
+      selectView(id);
+      setOpen(true);
+    },
     close: () => setOpen(false),
     toggle: () => setOpen(!open),
     destroy: () => {

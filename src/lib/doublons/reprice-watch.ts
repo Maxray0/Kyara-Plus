@@ -282,6 +282,10 @@ export interface RepriceLoopOptions {
   run?: (options: RepriceRunOptions) => Promise<RepriceRun> | RepriceRun;
   /** Cadence des contrôles : la passe elle-même respecte `intervalMin`. */
   tickMs?: number;
+  /** Coupe-circuit : quand il est ouvert, aucune passe n'est lancée. */
+  isEnabled?: () => Promise<boolean>;
+  /** Résultat d'une passe, pour les compteurs d'échecs. */
+  onResult?: (run: RepriceRun | null) => void | Promise<void>;
 }
 
 export interface RepriceLoop {
@@ -305,9 +309,12 @@ export function startRepriceLoop(options: RepriceLoopOptions): RepriceLoop {
   const tick = async (): Promise<RepriceRun | null> => {
     if (stopped || busy) return null;
     if (options.document.visibilityState !== 'visible') return null;
+    if (options.isEnabled && !(await options.isEnabled())) return null;
     busy = true;
     try {
-      return await run({ api: options.api, now: now() });
+      const result = await run({ api: options.api, now: now() });
+      await options.onResult?.(result);
+      return result;
     } finally {
       busy = false;
     }

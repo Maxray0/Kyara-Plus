@@ -229,6 +229,8 @@ export interface Listing {
   bidCount: number;
   currentBid: number | null;
   createdAt: string | null;
+  /** Exemplaires engagés par l'annonce (1 quand le site ne le précise pas). */
+  qty?: number;
 }
 
 export async function getMarket(api: Api, now = Date.now()) {
@@ -268,6 +270,7 @@ export async function getMarket(api: Api, now = Date.now()) {
         bidCount: Number(l.bidCount) || 0,
         currentBid: (l.currentBid as number) ?? null,
         createdAt: (l.createdAt as string) ?? null,
+        qty: Math.max(1, Math.trunc(Number(l.qty ?? l.quantity ?? 1)) || 1),
       };
     });
   const holds = new Map<number, number>();

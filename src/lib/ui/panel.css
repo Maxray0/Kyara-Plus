@@ -1009,6 +1009,20 @@ a.kui-market-row:focus-visible {
   accent-color: var(--kui-brand);
 }
 
+.kui-check b {
+  display: block;
+  color: var(--kui-text);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.kui-check small {
+  display: block;
+  margin-top: 2px;
+  color: var(--kui-muted);
+  font-size: 10px;
+}
+
 .kui-field .kui-search-input,
 .kui-field .kui-number-input,
 .kui-field .kui-select {
@@ -1417,6 +1431,22 @@ a.kui-market-row:focus-visible {
   margin: 0;
 }
 
+.kui-check-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--kui-muted);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.kui-check-field input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--kui-brand);
+}
+
 .kui-buy-strategies {
   display: flex;
   flex-wrap: wrap;
@@ -1497,6 +1527,83 @@ a.kui-market-row:focus-visible {
   width: 16px;
   height: 16px;
   accent-color: var(--kui-brand);
+}
+
+.kui-selection-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 6px 0 10px;
+  padding: 7px 9px;
+  border: 1px solid var(--kui-line);
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.kui-selection-summary {
+  color: var(--kui-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.kui-selection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.kui-selection-actions .kui-action,
+.kui-selection-actions .kui-secondary {
+  margin: 0;
+}
+
+.kui-price-group {
+  display: grid;
+  gap: 6px;
+}
+
+.kui-price-group-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+  border: 1px solid var(--kui-line);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.kui-price-group-head b {
+  color: var(--kui-text);
+  font-size: 13px;
+}
+
+.kui-price-group-head .kui-note {
+  flex: 1 1 auto;
+  margin: 0;
+}
+
+.kui-price-group-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--kui-muted);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.kui-price-group-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--kui-brand);
+}
+
+.kui-buy-coverage {
+  margin-top: 2px;
 }
 
 .kui-buy-view .kui-number-input {
@@ -1647,4 +1754,88 @@ a.kui-market-row:focus-visible {
 
 .kui-deal-row .kui-chip.is-recycle {
   color: var(--kui-gold);
+}
+
+/* Veilles de prix nommées : une ligne par veille, réglable sans quitter la recherche. */
+.kui-market-watches {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 4px;
+}
+
+.kui-market-watch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--kui-line, #2a2f3a);
+  border-radius: 10px;
+  background: var(--kui-sheet, #171a21);
+}
+
+.kui-market-watch-row .kui-row-main {
+  min-width: 0;
+}
+
+.kui-market-watch-row small {
+  color: var(--kui-muted);
+  font-size: 11px;
+}
+
+.kui-market-watch-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.kui-market-watch-tools .kui-select {
+  width: auto;
+  min-width: 74px;
+}
+
+.kui-market-watch-name {
+  flex: 1 1 160px;
+  min-width: 140px;
+}
+
+/* Arrêt d'une lecture envie par envie : visible seulement pendant la lecture. */
+.kui-market-stop[hidden] {
+  display: none;
+}
+
+/* File d'ordres : réordonnancement, refus et avertissements par ligne. */
+.kui-order-move-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.kui-order-move {
+  padding: 2px 8px;
+  line-height: 1.1;
+}
+
+.kui-order-error {
+  color: var(--kui-brand);
+}
+
+.kui-order-warn {
+  color: var(--kui-gold);
+}
+
+.kui-order-spend {
+  margin-top: 6px;
+}
+
+/* Enchères : mise de dernière minute, annulable. */
+.kui-auction-snipe {
+  flex: 1 1 auto;
+}
+
+.kui-auction-cancel-snipes[hidden] {
+  display: none;
 }

@@ -8,8 +8,9 @@ import { createOffersPage } from '@/lib/better/offers-page';
 import { createCardWatch } from '@/lib/better/watchlist';
 import { createCachedPriceService } from '@/lib/better/price-cache';
 import { startRarityBorders } from '@/lib/better/rarity-borders';
-import { startMarketWatchLoop } from '@/lib/doublons/market-watch';
+import { startMarketWatchLoop, watchPassSucceeded } from '@/lib/doublons/market-watch';
 import { startRepriceLoop } from '@/lib/doublons/reprice-watch';
+import { circuitReporter, isCircuitOpen } from '@/lib/circuit-breaker';
 import { loadWishlist } from '@/lib/doublons/wishlist';
 import './market.css';
 import './collection.css';
@@ -61,11 +62,30 @@ export default defineContentScript({
         }),
       ],
     });
+    const watchCircuit = circuitReporter('veille');
+    const repriceCircuit = circuitReporter('repix');
     // Veille de prix : un contrôle par minute, une lecture seulement à l'intervalle réglé
-    // et jamais dans un onglet masqué.
-    startMarketWatchLoop({ api: wishlistApi, document });
+    // et jamais dans un onglet masqué. Le coupe-circuit coupe aussi cette boucle.
+    startMarketWatchLoop({
+      api: wishlistApi,
+      document,
+      isEnabled: async () => !(await isCircuitOpen()),
+      onResult: async (run) => {
+        if (run.error && !run.auth) await watchCircuit.fail(run.error);
+        else if (watchPassSucceeded(run)) await watchCircuit.ok();
+      },
+    });
     // Reprix automatique : inactif par défaut, une passe bornée à l'intervalle réglé.
-    startRepriceLoop({ api: wishlistApi, document });
+    startRepriceLoop({
+      api: wishlistApi,
+      document,
+      isEnabled: async () => !(await isCircuitOpen()),
+      onResult: async (run) => {
+        if (!run) return;
+        if (run.error) await repriceCircuit.fail(run.error);
+        else if (run.ok) await repriceCircuit.ok();
+      },
+    });
     startCollectionEnhancements({ document });
     startRarityBorders(document);
   },

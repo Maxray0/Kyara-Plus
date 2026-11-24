@@ -1,5 +1,7 @@
 node_modules/
 .output/
 .wxt/
+.profiles/
 *.zip
 .env
+.env.publish

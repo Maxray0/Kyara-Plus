@@ -11,6 +11,10 @@ export interface Settings {
   autoOpenAllowChakra: boolean;
   /** Mise en vente automatique des doublons selon les réglages de la page Doublons. Désactivée par défaut. */
   autoSell: boolean;
+  /** Vide la file d'ordres d'achat de l'extension dès qu'une place se libère. Désactivée par défaut. */
+  orderQueueAuto: boolean;
+  /** Coupe-circuit : vrai, aucune boucle ne tourne. Se réarme à la main ; déclenché seul après des échecs. */
+  killSwitch: boolean;
   /** Attente d'Auto-Open quand aucun booster ne s'ouvre, en secondes (5 à 300). */
   autoOpenIdleSec: number;
 }
@@ -21,6 +25,8 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = {
   autoOpenPackIds: [],
   autoOpenAllowChakra: false,
   autoSell: false,
+  orderQueueAuto: false,
+  killSwitch: false,
   autoOpenIdleSec: 30,
 };
 
@@ -47,6 +53,8 @@ export function normalizeSettings(raw: unknown): Settings {
     autoOpenPackIds: [...new Set(ids)],
     autoOpenAllowChakra: source.autoOpenAllowChakra === true,
     autoSell: source.autoSell === true,
+    orderQueueAuto: source.orderQueueAuto === true,
+    killSwitch: source.killSwitch === true,
     autoOpenIdleSec: idleSeconds(source.autoOpenIdleSec),
   };
 }

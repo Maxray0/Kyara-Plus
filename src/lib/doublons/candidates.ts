@@ -71,6 +71,8 @@ export function sortCandidates(list: Candidate[], s: SellSettings): Candidate[] 
 
 export interface CandidateInputs {
   activeIds?: ReadonlySet<number>;
+  /** Exemplaires déjà en vente par carte, lus juste avant la collection. */
+  listed?: ReadonlyMap<number, number>;
   holds?: ReadonlyMap<number, number>;
   meta?: ReadonlyMap<number, Partial<CardMeta>>;
   prices?: ReadonlyMap<number, StoredPrice>;
@@ -132,12 +134,21 @@ export async function buildCandidates(api: Api, s: SellSettings, inputs: Candida
     if (qty <= s.keep || exclude.has(id)) continue;
     const locked = Number(it.locked) || 0;
     const held = inputs.holds?.get(id) ?? 0;
+    const listed = Math.max(0, Math.trunc(inputs.listed?.get(id) ?? 0));
     const pinned = !!(
       it.pinned ||
       it.isPinned ||
       /pin|padlock|cadenas/i.test(String(it.sellBlock ?? ''))
     );
-    const sellable = pinned ? 0 : Math.max(0, Math.min(qty - s.keep, qty - locked - held));
+    // Exemplaires réellement libres : la copie gardée, les copies verrouillées et les copies
+    // retenues se cumulent. Un `min` laissait vendre une copie déjà engagée quand `locked`
+    // dépassait `keep`, et la garde anti-doublon comptait alors une annonce de trop.
+    //
+    // Kyara peut aussi compter les copies déjà en vente dans `locked` : on prend le maximum des
+    // deux sources pour ne jamais soustraire deux fois la même annonce (ni bloquer une carte
+    // dont le seul verrou est son annonce), et le plafond garde `sellable` positif.
+    const engaged = Math.min(Math.max(0, qty - s.keep), Math.max(locked, listed));
+    const sellable = pinned ? 0 : Math.max(0, qty - s.keep - held - engaged);
     const meta = inputs.meta?.get(id);
     const stored = inputs.prices?.get(id);
     const candidate: Candidate = {

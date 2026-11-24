@@ -4,6 +4,39 @@ export type Strategy = 'median7d' | 'median30d' | 'lastPrice' | 'medianRecent' |
 export type Preset = 'fast' | 'market' | 'max' | 'custom';
 export type Order = 'priceDesc' | 'priceAsc' | 'oldest' | 'newest';
 
+/** Raretés proposées pour la vente automatique, de la plus commune à la plus rare. */
+export const AUTO_RARITIES = [
+  { code: 'C', label: 'Commun' },
+  { code: 'U', label: 'Peu commun' },
+  { code: 'R', label: 'Rare' },
+  { code: 'E', label: 'Épique' },
+  { code: 'L', label: 'Légendaire' },
+  { code: 'M', label: 'Mythique' },
+] as const;
+
+export type AutoRarity = (typeof AUTO_RARITIES)[number]['code'];
+
+const AUTO_RARITY_CODES: AutoRarity[] = AUTO_RARITIES.map((r) => r.code);
+
+/**
+ * Code de rareté utilisable par les réglages. Kyara marque parfois les cartes spéciales `S` :
+ * elles suivent les légendaires. Un code inconnu renvoie null.
+ */
+export function autoRarityOf(rarity: string | null | undefined): AutoRarity | null {
+  const code = String(rarity ?? '').toUpperCase();
+  if (code === 'S') return 'L';
+  return AUTO_RARITY_CODES.includes(code as AutoRarity) ? (code as AutoRarity) : null;
+}
+
+/**
+ * La vente automatique ne touche que les raretés cochées. Une rareté inconnue (catalogue pas
+ * encore chargé) n'est jamais vendue : sans information, une mythique pourrait partir seule.
+ */
+export function autoSellAllowed(s: SellSettings, rarity: string | null | undefined): boolean {
+  const code = autoRarityOf(rarity);
+  return code !== null && s.autoRarities.includes(code);
+}
+
 export interface SellSettings {
   /** Exemplaires à garder par personnage. */
   keep: number;
@@ -27,6 +60,8 @@ export interface SellSettings {
   autoToHour: number;
   /** Annonces maximales par passage, quel que soit le nombre de places libres. */
   autoMaxPerPass: number;
+  /** Raretés que la vente automatique a le droit de mettre en vente. */
+  autoRarities: AutoRarity[];
   /** Identifiants à ne jamais vendre, séparés par espaces, virgules ou points-virgules. */
   exclude: string;
 }
@@ -46,6 +81,8 @@ export const DEFAULT_SELL_SETTINGS: Readonly<SellSettings> = {
   autoFromHour: 0,
   autoToHour: 0,
   autoMaxPerPass: 5,
+  // Les légendaires et mythiques restent en collection : trop rares pour partir seuls.
+  autoRarities: ['C', 'U', 'R', 'E'],
   exclude: '',
 };
 
@@ -88,6 +125,9 @@ export function normalizeSellSettings(raw: unknown): SellSettings {
     autoFromHour: bounded(s.autoFromHour, 0, 23, d.autoFromHour),
     autoToHour: bounded(s.autoToHour, 0, 23, d.autoToHour),
     autoMaxPerPass: bounded(s.autoMaxPerPass, 1, 20, d.autoMaxPerPass),
+    autoRarities: Array.isArray(s.autoRarities)
+      ? AUTO_RARITY_CODES.filter((code) => (s.autoRarities as unknown[]).includes(code))
+      : [...d.autoRarities],
     exclude: typeof s.exclude === 'string' ? s.exclude.slice(0, 2000) : '',
   };
 }

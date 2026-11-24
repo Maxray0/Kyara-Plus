@@ -1,11 +1,12 @@
 import { storage } from 'wxt/utils/storage';
 import { AuthError, PassRequiredError } from '../api';
+import { isCircuitFailure } from '../circuit-breaker';
 import { appendActivity } from './activity';
 import type { StopReason } from '../supervisor';
 import { buildCandidates, type CardMeta } from './candidates';
 import { ShapeError, getMarket, hasShapeChanges, type Api, type StoredPrice } from './market';
-import { sellNext, type LogKind } from './sell';
-import type { SellSettings } from './settings';
+import { listedCounts, sellNext, type LogKind } from './sell';
+import { autoRarityOf, autoSellAllowed, type SellSettings } from './settings';
 
 export interface AutoSellStatus {
   state: 'running' | 'waiting' | 'paused' | 'stopped';
@@ -60,6 +61,10 @@ export interface AutoSellDeps {
   now: () => number;
   log: (message: string, kind?: LogKind) => void;
   report: (status: AutoSellStatus) => void;
+  /** Échec technique d'un passage : le coupe-circuit compte les échecs consécutifs. */
+  onFailure?: (reason: string) => void | Promise<void>;
+  /** Passage terminé sans erreur : la série d'échecs est terminée. */
+  onSuccess?: () => void | Promise<void>;
 }
 
 /** Heures égales : la vente automatique tourne toute la journée. */
@@ -125,6 +130,7 @@ export async function runAutoSell(deps: AutoSellDeps, signal: AbortSignal): Prom
     }
     const s = await deps.getSettings();
     let waitMs = s.intervalMin * 60_000;
+    let failed = false;
     try {
       if (!inAutoWindow(new Date(deps.now()).getHours(), s.autoFromHour, s.autoToHour)) {
         waitMs = Math.max(60_000, msUntilWindowOpen(deps.now(), s.autoFromHour, s.autoToHour));
@@ -150,21 +156,35 @@ export async function runAutoSell(deps: AutoSellDeps, signal: AbortSignal): Prom
         } else {
           const candidates = await buildCandidates(deps.api, s, {
             activeIds: new Set(market.active.map((l) => l.characterId)),
+            listed: listedCounts(market.active),
             holds: market.holds,
             meta: await deps.getMeta(),
             prices: await deps.getPrices(),
           });
           const now = deps.now();
-          const todo = candidates
+          // Raretés laissées en collection : elles ne consomment ni requête de prix ni annonce.
+          const allowed = candidates.filter((c) => autoSellAllowed(s, c.rarity));
+          const unknown = candidates.filter((c) => autoRarityOf(c.rarity) === null).length;
+          const skipped = candidates.length - allowed.length - unknown;
+          const details = [
+            skipped ? `${skipped} gardé(s) par rareté` : '',
+            unknown ? `${unknown} sans rareté connue (catalogue pas encore chargé)` : '',
+          ]
+            .filter(Boolean)
+            .join(' · ');
+          const todo = allowed
             .filter((c) => !c.blocked && (skipUntil.get(c.id) ?? 0) <= now)
             .slice(0, Math.max(slots * ATTEMPTS_PER_FREE, 8));
           if (!todo.length) {
-            report('waiting', `${free} place(s) libre(s), aucun doublon vendable pour l'instant.`);
-            say(`${free} place(s) libre(s), aucun doublon vendable`);
+            const keptNote = details ? ` — ${details}` : '';
+            report('waiting', `${free} place(s) libre(s), aucun doublon vendable${keptNote}.`);
+            say(`${free} place(s) libre(s), aucun doublon vendable${keptNote}`);
           } else {
             const placed = await sellNext(deps.api, s, todo, slots, {
               log: deps.log,
               sleep: (ms) => deps.sleep(ms, signal),
+              listed: listedCounts(market.active),
+              source: 'vente automatique',
             });
             placedTotal += placed;
             active += placed;
@@ -174,7 +194,10 @@ export async function runAutoSell(deps: AutoSellDeps, signal: AbortSignal): Prom
               if (c.blocked && c.blocked !== 'mis en vente')
                 skipUntil.set(c.id, now + NO_PRICE_RETRY_MS);
             }
-            report('waiting', `${placed} annonce(s) créée(s) à ce passage.`);
+            report(
+              'waiting',
+              `${placed} annonce(s) créée(s) à ce passage.${details ? ` · ${details}` : ''}`,
+            );
             if (!placed) say('aucune carte mise en vente à ce passage');
           }
         }
@@ -194,15 +217,21 @@ export async function runAutoSell(deps: AutoSellDeps, signal: AbortSignal): Prom
         return 'pass_required';
       }
       if (error instanceof ShapeError) {
+        failed = true;
         report('paused', `${error.message} : ventes en pause.`);
         say(`${error.message} : ventes en pause`, 'warn');
+        await deps.onFailure?.(error.message);
       } else {
+        failed = true;
         const message = error instanceof Error ? error.message : 'erreur inconnue';
         report('waiting', `Erreur : ${message}`);
         say(`erreur : ${message}`, 'warn');
+        // Une limite de débit a son propre recul : elle ne compte pas comme un échec.
+        if (isCircuitFailure(error)) await deps.onFailure?.(message);
         waitMs = Math.min(waitMs, 5 * 60_000);
       }
     }
+    if (!failed) await deps.onSuccess?.();
     if (!alive()) break;
     report(
       lastReport.state === 'running' ? 'waiting' : lastReport.state,

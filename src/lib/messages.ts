@@ -1,7 +1,6 @@
 import type { Session } from './auth';
 
 const EXTENSION_PAGES = {
-  popup: '/popup.html#reglages',
   doublons: '/doublons.html',
   trades: '/doublons.html#trades',
   wishes: '/doublons.html#wishes',

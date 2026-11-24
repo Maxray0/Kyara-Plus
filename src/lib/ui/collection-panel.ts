@@ -7,10 +7,10 @@ import {
   type DuplicateRow,
   type DuplicateScanResult,
 } from '../doublons/advisor-scan';
+import { gameActions } from '../doublons/actions';
+import { appendActivity } from '../doublons/activity';
 import { scanDeals, type DealScan, type DealScanOptions } from '../doublons/deals';
-import { recycleCard } from '../doublons/market';
 import { getSellSettings, type SellSettings } from '../doublons/settings';
-import { sellNext } from '../doublons/sell';
 import type { Candidate } from '../doublons/candidates';
 import {
   duplicateCacheItem,
@@ -145,6 +145,11 @@ export function openCollectionPanel(api: PanelApi): CollectionPanel {
     { type: 'button', class: 'kc-button is-sell', disabled: true },
     'Vendre aux ordres',
   ) as HTMLButtonElement;
+  const refresh = h(
+    'button',
+    { type: 'button', class: 'kc-button', title: 'Relancer l’analyse complète de la collection' },
+    'Actualiser',
+  ) as HTMLButtonElement;
   const chips = h('div', { class: 'kc-chips', role: 'tablist' });
   const rowsHost = h('div', { class: 'kc-rows' });
   const confirm = h('div', { class: 'kc-confirm', hidden: true });
@@ -173,7 +178,7 @@ export function openCollectionPanel(api: PanelApi): CollectionPanel {
         closeButton,
       ),
       status,
-      h('div', { class: 'kc-tools' }, search, bulk, bulkOrders),
+      h('div', { class: 'kc-tools' }, search, refresh, bulk, bulkOrders),
       confirm,
       chips,
       rowsHost,
@@ -255,11 +260,12 @@ export function openCollectionPanel(api: PanelApi): CollectionPanel {
   const pendingRecycle = (): Entry[] =>
     entries.filter((entry) => !entry.done && recyclable(entry.row) > 0);
 
-  /** Seules les cartes dont le conseil est explicitement « À l'ordre ». */
+  /** Seules les cartes dont le conseil est explicitement « À l'ordre », avec une copie libre. */
   const pendingOrders = (): Entry[] =>
     entries.filter(
       (entry) =>
         !entry.done &&
+        entry.row.spare > 0 &&
         entry.row.advice?.verdict === 'ordre' &&
         (entry.row.advice.bestBid ?? 0) > 0,
     );
@@ -308,17 +314,27 @@ export function openCollectionPanel(api: PanelApi): CollectionPanel {
 
   /** Vend un exemplaire au prix demandé : prix conseillé ou prix de l'ordre. */
   const sellAt = async (entry: Entry, price: number, label: string): Promise<boolean> => {
+    // Toutes les copies sont déjà en vente : une annonce de plus mettrait aussi celle qu'on
+    // garde, et la carte quitterait la collection.
+    if (entry.row.spare <= 0) {
+      status.textContent = `${entry.row.name} : toutes tes copies sont déjà en vente.`;
+      return false;
+    }
     const buttons = [entry.sell, entry.order].filter(
       (button): button is HTMLButtonElement => button !== null,
     );
     for (const button of buttons) button.disabled = true;
     try {
-      const placed = await sellNext(
+      const placed = await gameActions.sell(
         api,
         await sellSettings(),
         [sellCandidate(entry.row, price)],
         1,
-        { gapMs: 0 },
+        {
+          gapMs: 0,
+          source: 'panneau Doublons',
+          log: (message, kind) => void appendActivity(message, kind),
+        },
       );
       if (placed < 1) {
         for (const button of buttons) button.disabled = false;
@@ -341,7 +357,7 @@ export function openCollectionPanel(api: PanelApi): CollectionPanel {
     const qty = recyclable(entry.row);
     if (!qty || entry.done) return;
     entry.button.disabled = true;
-    const outcome = await recycleCard(api, entry.row.id, qty);
+    const outcome = await gameActions.recycle(api, entry.row.id, qty);
     if (!outcome.ok) {
       entry.button.disabled = false;
       status.textContent = `${entry.row.name} : ${outcome.message || 'recyclage refusé'}`;
@@ -394,7 +410,10 @@ export function openCollectionPanel(api: PanelApi): CollectionPanel {
     );
     const entry = { row, button, sell: null, order: null, verdict, done: false } as unknown as Entry;
     const advice = row.advice;
-    const askPrice = advice?.verdict === 'vendre' ? (advice.price ?? null) : null;
+    // Une carte dont les copies sont déjà en vente n'a plus rien à vendre : sans cette garde,
+    // un clic aurait mis la copie conservée sur le marché.
+    const free = row.spare > 0;
+    const askPrice = free && advice?.verdict === 'vendre' ? (advice.price ?? null) : null;
     let sell: HTMLButtonElement | null = null;
     if (askPrice && askPrice > 0) {
       sell = h(
@@ -408,7 +427,7 @@ export function openCollectionPanel(api: PanelApi): CollectionPanel {
     }
     const bid = advice?.bestBid ?? 0;
     let order: HTMLButtonElement | null = null;
-    if (advice?.verdict === 'ordre' && bid > 0) {
+    if (free && advice?.verdict === 'ordre' && bid > 0) {
       order = h(
         'button',
         { type: 'button', class: 'kc-button is-sell' },
@@ -454,6 +473,17 @@ export function openCollectionPanel(api: PanelApi): CollectionPanel {
     }
     if (!matches(entry)) el.hidden = true;
     return entry;
+  };
+
+  /**
+   * Retire une ligne qui n'est plus un doublon. Contrairement à `markDone`, elle n'est
+   * ni vendue ni recyclée : elle n'a simplement plus sa place dans l'analyse.
+   */
+  const dropRow = (entry: Entry): void => {
+    const index = entries.indexOf(entry);
+    if (index >= 0) entries.splice(index, 1);
+    byId.delete(entry.row.id);
+    entry.el.remove();
   };
 
   /**
@@ -512,7 +542,7 @@ export function openCollectionPanel(api: PanelApi): CollectionPanel {
     for (const [index, entry] of list.entries()) {
       if (closed) return;
       const qty = recyclable(entry.row);
-      const outcome = await recycleCard(api, entry.row.id, qty);
+      const outcome = await gameActions.recycle(api, entry.row.id, qty);
       if (outcome.ok) {
         okCount += 1;
         failures = 0;
@@ -654,9 +684,14 @@ export function openCollectionPanel(api: PanelApi): CollectionPanel {
   });
   dealsHost.append(dealsButton);
 
+  /** Lignes et date de la sauvegarde, pour reprendre une analyse interrompue. */
+  let cachedRows: DuplicateRow[] = [];
+  let cachedAt = 0;
+
   const restart = async (): Promise<void> => {
     if (closed) return;
     scan?.abort();
+    refresh.disabled = true;
     const controller = new AbortController();
     scan = controller;
     result = null;
@@ -672,6 +707,8 @@ export function openCollectionPanel(api: PanelApi): CollectionPanel {
       if (closed) return;
       cacheLoaded = true;
       if (cached?.rows.length) {
+        cachedRows = cached.rows.map((item) => item.row);
+        cachedAt = cached.at;
         for (const item of cached.rows) {
           const entry = addRow(item.row);
           if (entry && item.done) markDone(entry);
@@ -694,6 +731,10 @@ export function openCollectionPanel(api: PanelApi): CollectionPanel {
     paintSummary();
     void scanDuplicates(api, {
       signal: controller.signal,
+      // Reprise : une analyse interrompue depuis moins de cinq minutes ne relit pas les
+      // cartes déjà chiffrées ; au-delà, la sauvegarde ne sert qu'à l'affichage.
+      previous: cachedRows,
+      previousAt: cachedAt,
       onProgress: (done, total) => {
         if (!closed && scan === controller) {
           status.textContent =
@@ -713,6 +754,25 @@ export function openCollectionPanel(api: PanelApi): CollectionPanel {
       .then((scanResult) => {
         if (closed || scan !== controller) return;
         result = scanResult;
+        refresh.disabled = false;
+        // L'analyse complète fait foi : une carte qui n'est plus en double quitte la
+        // liste, y compris une ligne reprise de la sauvegarde précédente. Une analyse
+        // interrompue ne prouve rien sur les lignes non lues : on garde tout.
+        if (!scanResult.stopped) {
+          const live = new Set(scanResult.rows.map((row) => row.id));
+          let dropped = false;
+          for (const entry of [...entries]) {
+            if (live.has(entry.row.id)) continue;
+            dropRow(entry);
+            dropped = true;
+          }
+          if (dropped) {
+            paintFilters();
+            paintBulk();
+            paintChips();
+            paintSummary();
+          }
+        }
         status.textContent = scanResult.total
           ? `${fmt(scanResult.total)} doublon(s) analysé(s)` +
             (scanResult.errors ? ` · ${fmt(scanResult.errors)} erreur(s)` : '') +
@@ -724,9 +784,15 @@ export function openCollectionPanel(api: PanelApi): CollectionPanel {
       })
       .catch((error) => {
         if (closed) return;
+        refresh.disabled = false;
         status.textContent = `Analyse impossible : ${error instanceof Error ? error.message : String(error)}`;
       });
   };
+
+  refresh.addEventListener('click', () => {
+    if (refresh.disabled) return;
+    void restart();
+  });
 
   const close = (): void => {
     if (!closed && entries.length) persist();

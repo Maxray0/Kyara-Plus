@@ -15,6 +15,8 @@ import {
   type PackState,
 } from './planner';
 
+import { cardsFromResults, type PackHistoryCard } from './history';
+
 import type { StopReason } from '../supervisor';
 
 export type { StopReason };
@@ -40,6 +42,12 @@ export interface AutoOpenDeps {
   log: (message: string) => void;
   report: (status: AutoOpenStatus) => void;
   onCatalog?: (packs: PackInfo[]) => void;
+  /** Enregistre l'ouverture (booster et cartes) pour l'historique du panneau. */
+  recordOpen?: (entry: { packId: string; packName: string; cards: PackHistoryCard[] }) => void;
+  /** Échec technique d'un tour : le coupe-circuit compte les échecs consécutifs. */
+  onFailure?: (reason: string) => void | Promise<void>;
+  /** Tour terminé sans erreur : la série d'échecs est terminée. */
+  onSuccess?: () => void | Promise<void>;
 }
 
 /** Attente réglée dans l'interface, bornée : 5 s à 5 min. */
@@ -179,6 +187,11 @@ export async function runAutoOpen(deps: AutoOpenDeps, signal: AbortSignal): Prom
     rateHits = 0;
     idleStep = 0;
     deps.log(`ouvert ${pack.name} → ${pulled} carte(s)`);
+    deps.recordOpen?.({
+      packId: pack.id,
+      packName: pack.name,
+      cards: cardsFromResults(results),
+    });
 
     if (response.stopped) {
       const why = stoppedText(response.stopped);
@@ -189,14 +202,16 @@ export async function runAutoOpen(deps: AutoOpenDeps, signal: AbortSignal): Prom
       return;
     }
 
+    // Un booster encore disponible s'ouvre tout de suite ; sinon on attend le prochain
+    // booster gratuit, annoncé par le serveur (10 min par défaut).
     const range = delayRange(toAccount(user), deps.now());
-    const delay = nextDelayMs(range, deps.random);
+    const delay = nextDelayMs(range);
     if (delay === 0) {
-      report('running', `Ouverture… ${totals.opened} · jauge pleine : ouverture immédiate`);
+      report('running', `Ouverture… ${totals.opened} · booster disponible`);
       return;
     }
     const minutes = Math.round(delay / 60_000);
-    deps.log(`délai ${minutes} min (T_max ${range.maxMin} min)`);
+    deps.log(`délai ${minutes} min (prochain booster gratuit)`);
     report('waiting', `Prochaine ouverture dans ${minutes} min`, deps.now() + delay);
     await sleep(delay);
   }
@@ -204,12 +219,16 @@ export async function runAutoOpen(deps: AutoOpenDeps, signal: AbortSignal): Prom
   deps.log('auto-open démarré');
   while (alive()) {
     const settings = await deps.getSettings();
-    if (!settings.autoOpen) {
-      report('stopped', 'Désactivé');
+    if (!settings.autoOpen || settings.killSwitch) {
+      report(
+        'stopped',
+        settings.killSwitch ? 'Coupe-circuit actif : réarme-le dans Réglages.' : 'Désactivé',
+      );
       return 'disabled';
     }
     try {
       await step(settings);
+      await deps.onSuccess?.();
     } catch (error) {
       if (error instanceof AuthError) {
         deps.log('session expirée : auto-open en pause');
@@ -235,10 +254,12 @@ export async function runAutoOpen(deps: AutoOpenDeps, signal: AbortSignal): Prom
         const wait = Math.min(MAX_RATE_PAUSE_MS, 4_000 * 2 ** rateHits);
         deps.log(`limite de requêtes (${rateHits}) : pause ${Math.round(wait / 1000)} s`);
         report('waiting', `Trop de requêtes : pause ${Math.round(wait / 1000)} s`);
+        await deps.onFailure?.(describe(error));
         await sleep(wait);
       } else {
         deps.log(`erreur : ${describe(error)}`);
         report('waiting', `Erreur : ${describe(error)} · nouvelle tentative dans 1 min`);
+        await deps.onFailure?.(describe(error));
         await sleep(ERROR_WAIT_MS);
       }
     }

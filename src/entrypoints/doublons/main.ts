@@ -22,17 +22,16 @@ import {
 } from '@/lib/doublons/candidates';
 import {
   ShapeError,
-  cancelListing,
   clearShapeChanges,
   getMarket,
-  recycleCard,
   sellPricesItem,
   shapeChangesItem,
   type Listing,
 } from '@/lib/doublons/market';
-import { fillSelection, repriceListing, sellNext, type LogKind } from '@/lib/doublons/sell';
+import { gameActions } from '@/lib/doublons/actions';
+import { fillSelection, listedCounts, type LogKind } from '@/lib/doublons/sell';
 import { salesItem, type SalesSummary } from '@/lib/doublons/sales';
-import { pinCard, withExcludedId } from '@/lib/doublons/protection';
+import { withExcludedId } from '@/lib/doublons/protection';
 import { TradeRefresh } from '@/lib/doublons/trade-refresh';
 import {
   PRESETS,
@@ -49,14 +48,13 @@ import {
   type TradeSettings,
 } from '@/lib/doublons/trade-settings';
 import {
-  acceptTrade,
   loadTradeBoard,
   noDealReason,
   type TradeBoard,
   type TradeDeal,
   type TradeOffer,
 } from '@/lib/doublons/trades';
-import { addWish, loadWishlist } from '@/lib/doublons/wishlist';
+import { loadWishlist } from '@/lib/doublons/wishlist';
 import type { CatalogCard } from '@/lib/stats/model';
 
 const api = createRelayClient({
@@ -393,6 +391,7 @@ async function load(options: { reportStatus?: boolean } = {}): Promise<boolean> 
     );
     list = await buildCandidates(api, settings, {
       activeIds: new Set(market.active.map((l) => l.characterId)),
+      listed: listedCounts(market.active),
       holds: market.holds,
       meta,
       prices,
@@ -443,7 +442,9 @@ async function sell(c: Candidate): Promise<void> {
       setStatus(`Tes ${settings.maxSlots} emplacements sont déjà occupés.`, true);
       return;
     }
-    const placed = await sellNext(api, settings, [c], 1, {
+    const placed = await gameActions.sell(api, settings, [c], 1, {
+      listed: listedCounts(activeListings),
+      source: 'page Doublons',
       log,
       onUpdate: renderTable,
     });
@@ -468,7 +469,7 @@ async function recycle(c: Candidate): Promise<void> {
   busy = true;
   try {
     const qty = c.sellable;
-    const result = await recycleCard(api, c.id, qty);
+    const result = await gameActions.recycle(api, c.id, qty);
     if (!result.ok) {
       setStatus(`Recyclage refusé : ${result.message}`, true);
       log(`${c.name ?? c.id} : recyclage refusé (${result.message})`, 'warn');
@@ -510,7 +511,12 @@ async function fillSlots(): Promise<void> {
       setStatus('Aucune carte sélectionnée ne peut être mise en vente maintenant.', true);
       return;
     }
-    placed = await sellNext(api, settings, todo, free, { log, onUpdate: renderTable });
+    placed = await gameActions.sell(api, settings, todo, free, {
+      listed: listedCounts(activeListings),
+      source: 'page Doublons (remplissage)',
+      log,
+      onUpdate: renderTable,
+    });
   } catch (error) {
     failure = error;
   } finally {
@@ -535,7 +541,7 @@ async function cancelActive(listing: Listing): Promise<void> {
   busy = true;
   setStatus(`Annulation de l’annonce de ${name}…`);
   try {
-    const result = await cancelListing(api, listing.id);
+    const result = await gameActions.cancel(api, listing.id);
     if (!result.ok) {
       setStatus(`Annulation refusée : ${result.message}`, true);
       return;
@@ -577,7 +583,7 @@ async function repriceActive(listing: Listing, rawPrice: string): Promise<void> 
   busy = true;
   setStatus(`Ajustement de ${name} : ${fmt(listing.price)} → ${fmt(target)} ◆…`);
   try {
-    const result = await repriceListing(api, listing, target, settings, { log, gapMs: 0 });
+    const result = await gameActions.reprice(api, listing, target, settings, { log, gapMs: 0 });
     if (!result.cancelled) {
       setStatus(`Ajustement impossible : ${result.message}`, true);
       return;
@@ -621,7 +627,7 @@ async function protect(c: Candidate): Promise<void> {
 
     let problem = '';
     try {
-      const result = await pinCard(api, c.id, true);
+      const result = await gameActions.pin(api, c.id, true);
       if (!result.ok) problem = result.message;
     } catch (error) {
       problem = explain(error);
@@ -901,7 +907,7 @@ async function acceptDeal(offer: TradeOffer, deal: TradeDeal): Promise<void> {
   const receivedName = meta.get(offer.characterId)?.name ?? `Carte #${offer.characterId}`;
   setTradeStatus(`Acceptation de l’échange contre ${giveName}…`);
   try {
-    await acceptTrade(api, offer.id, deal.giveId);
+    await gameActions.acceptTrade(api, offer.id, deal.giveId);
     if (trades) {
       trades = {
         ...trades,
@@ -1115,7 +1121,7 @@ async function addWishFromCatalog(id: number): Promise<void> {
   wishesBusy = true;
   setWishStatus('Ajout à tes envies…');
   try {
-    wishes = new Set(await addWish(api, id));
+    wishes = new Set(await gameActions.addWish(api, id));
     renderWishes();
     setWishStatus(`${meta.get(id)?.name ?? `Carte #${id}`} ajoutée à tes envies.`);
   } catch (error) {

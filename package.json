@@ -14,11 +14,21 @@
     "zip": "wxt zip",
     "zip:firefox": "wxt zip -b firefox",
     "compile": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "test": "vitest run",
+    "e2e": "node scripts/e2e.mjs",
     "postinstall": "wxt prepare"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^22.20.5",
+    "eslint": "^10.14.0",
+    "happy-dom": "^21.0.4",
+    "prettier": "^3.9.10",
     "typescript": "~5.9.3",
+    "typescript-eslint": "^8.72.1",
+    "vitest": "^5.1.0",
     "wxt": "^0.21.5"
   }
 }

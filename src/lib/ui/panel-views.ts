@@ -9,12 +9,17 @@ import {
 } from './secondary-panel';
 import { openCollectionPanel } from './collection-panel';
 import { activityItem, appendActivity } from '../doublons/activity';
-import { minPrice } from '../doublons/advisor';
-import { cancelListing, fetchFairPrices, recycleCard } from '../doublons/market';
+import { fetchPriceSnapshot, minPrice } from '../doublons/advisor';
+import { gameActions } from '../doublons/actions';
+import { fetchFairPrices } from '../doublons/market';
 import {
+  estimatePassRemaining,
   formatEndsIn,
   listingDiscount,
+  MARKET_MAX_PAGES,
+  MARKET_PAGE_SIZE,
   mergeSearchResults,
+  rarityCode,
   searchMarket,
   searchMarketCards,
   WISH_CARD_MAX_LISTINGS,
@@ -25,11 +30,23 @@ import {
 } from '../doublons/market-search';
 import {
   MARKET_WATCH_INTERVALS_MIN,
-  marketWatchItem,
-  normalizeMarketWatch,
-  runMarketWatch,
+  MARKET_WATCH_MAX,
+  loadWatchBook,
+  newWatch,
+  patchWatch,
+  removeWatch,
+  runMarketWatchBook,
+  saveWatchBook,
+  type MarketWatchBook,
   type MarketWatchConfig,
 } from '../doublons/market-watch';
+import {
+  EMPTY_MARKET_PREFS,
+  loadMarketPrefs,
+  resumePage,
+  saveMarketPrefs,
+  type MarketSearchPrefs,
+} from '../doublons/market-prefs';
 import {
   normalizeOpportunities,
   opportunitySummary,
@@ -52,11 +69,32 @@ import {
   type BuyOrderDraft,
   type BuyOrderEntry,
 } from '../doublons/buy-orders';
+import {
+  enqueueOrders,
+  moveQueuedOrder,
+  orderQueueItem,
+  processOrderQueue,
+  queueWarnings,
+  queuedTotal,
+  removeQueuedOrders,
+  sortQueueByMargin,
+} from '../doublons/order-queue';
+import {
+  addPurchase,
+  confirmWonAuctions,
+  daySpend,
+  normalizePurchases,
+  purchasesItem,
+  spendProblem,
+  type DaySpend,
+} from '../doublons/spend';
+import { historyCsv, historyCsvName, historySummary, historyRows } from '../doublons/export';
 import { syncOrderAlerts } from '../alerts/portfolio';
 import { openPack } from '../doublons/pack-open';
 import {
   backupJson,
   backupSummary,
+  clearCaches,
   exportBackup,
   parseBackup,
   restoreBackup,
@@ -76,7 +114,7 @@ import {
   remainingQty,
   type MyOrder,
 } from '../doublons/my-orders';
-import { pinCard, withExcludedId } from '../doublons/protection';
+import { withExcludedId } from '../doublons/protection';
 import {
   REPRICE_INTERVALS_MIN,
   normalizeRepriceSettings,
@@ -88,9 +126,16 @@ import {
   type RepriceSettings,
   type RepriceState,
 } from '../doublons/reprice-watch';
-import { fillSelection, repriceListing, sellNext } from '../doublons/sell';
+import { fillSelection, listedCounts } from '../doublons/sell';
 import { scanDeals } from '../doublons/deals';
-import { bestBuyBid, bidListings, buyListing, buyListings } from '../doublons/buy-market';
+import {
+  bestBuyBid,
+  bidListing,
+  bidListings,
+  buyListing,
+  buyListings,
+  snipeDelay,
+} from '../doublons/buy-market';
 import {
   albumCards,
   rewardAlbum,
@@ -99,6 +144,7 @@ import {
   type AlbumSort,
 } from '../doublons/albums';
 import {
+  AUTO_RARITIES,
   PRESETS,
   normalizeSellSettings,
   sellSettingsItem,
@@ -111,13 +157,26 @@ import {
 } from '../doublons/renaissance';
 import { salesItem } from '../doublons/sales';
 import { TradeRefresh } from '../doublons/trade-refresh';
-import { acceptTrade } from '../doublons/trades';
 import {
   normalizeTradeSettings,
   tradeSettingsItem,
   type TradeSettings,
 } from '../doublons/trade-settings';
-import { addWish, removeWish } from '../doublons/wishlist';
+import { clearWishes } from '../doublons/wishlist';
+import {
+  appendPackHistory,
+  packHistoryItem,
+  rarityRank,
+  type PackHistoryCard,
+  type PackHistoryEntry,
+} from '../auto-open/history';
+import { normalizePacks as normalizeAutoOpenPacks } from '../auto-open/planner';
+import { packCatalogItem } from '../auto-open/storage';
+import { updateLabel } from '../update-check';
+import { budgetSettingsItem, normalizeBudget, type BudgetSettings } from '../automation/budget';
+import { setSetting } from '../settings';
+import { normalizeCircuit, resetCircuit } from '../circuit-breaker';
+import { writeLogItem, writeLogLine, type WriteLogEntry } from '../write-log';
 import { addAccount, removeAccount } from '../stats/board';
 import {
   STAT_COLUMNS,
@@ -139,7 +198,10 @@ import {
   loadListingsPanel,
   loadPacksPanel,
   loadRenaissancePanel,
+  loadPackHistoryPanel,
+  loadWriteLogPanel,
   loadSalePanel,
+  loadSettingsPanel,
   loadStatsProfile,
   loadStatsPanel,
   loadTradePanel,
@@ -153,10 +215,14 @@ import {
   loadBuyPanel,
   type PanelDashboardData,
   type PanelListingsData,
+  type PanelPackHistoryData,
+  type PanelPackHistoryCard,
   type PanelPacksData,
   type PanelRenaissanceData,
   type PanelSaleData,
+  type PanelSettingsData,
   type PanelStatsData,
+  type PanelWriteLogData,
   type PanelTradeData,
   type PanelWishData,
 } from './panel-data';
@@ -207,6 +273,12 @@ interface WishSearchState {
   marketShown: number;
   /** Cartes possédées : le site refuse de les mettre en envie (`wish_owned`). */
   owned: Set<number>;
+  /** Page de reprise d'une lecture partielle (recherche mémorisée). */
+  startPage: number;
+  /** Message d'ouverture : envies et catalogue lus, reprise éventuelle. */
+  opening: string;
+  /** Dernière lecture arrêtée par l'utilisateur. */
+  aborted: boolean;
 }
 
 interface MarketFilters {
@@ -848,6 +920,50 @@ function dashboardContent(data: PanelDashboardData): HTMLElement {
         backupStatus.textContent = 'Fichier illisible.';
       });
   });
+  /** Historique complet (ventes, ordres, achats), au-delà du seul CSV du jour. */
+  const exportHistoryCsv = h(
+    'button',
+    { type: 'button', class: 'kui-action' },
+    'Exporter ventes et ordres (CSV)',
+  );
+  exportHistoryCsv.addEventListener('click', () => {
+    void (async () => {
+      const [sales, orders, purchases] = await Promise.all([
+        salesItem.getValue().catch(() => null),
+        buyOrdersItem.getValue().catch(() => null),
+        purchasesItem.getValue().catch(() => null),
+      ]);
+      const input = {
+        sales: (sales?.entries ?? []) as Parameters<typeof historyCsv>[0]['sales'],
+        orders: normalizeBuyOrders(orders).entries,
+        purchases: normalizePurchases(purchases).entries,
+      };
+      const rows = historyRows(input);
+      if (!rows.length) {
+        status.textContent = 'Aucun historique à exporter pour le moment.';
+        return;
+      }
+      try {
+        const url = URL.createObjectURL(
+          new Blob([`\uFEFF${historyCsv(input)}`], { type: 'text/csv;charset=utf-8' }),
+        );
+        h('a', { href: url, download: historyCsvName() }).click();
+        URL.revokeObjectURL(url);
+        status.textContent = `Historique exporté · ${historySummary(rows)}.`;
+      } catch {
+        status.textContent = 'Export impossible dans ce contexte.';
+      }
+    })();
+  });
+
+  /** Efface les caches de travail : le catalogue et les prix se relisent tout seuls. */
+  const clearCacheButton = guardedButton('Vider les caches', 'Confirmer', async () => {
+    const removed = await clearCaches();
+    status.textContent = removed
+      ? `${fmt(removed)} cache(s) vidé(s) : catalogue, prix, possession, envies, duplication, opportunités. Les prochaines lectures les reconstruiront.`
+      : 'Aucun cache à vider.';
+  });
+
   const exportCsv = h('button', { type: 'button', class: 'kui-action' }, 'Exporter le CSV du jour');
   exportCsv.addEventListener('click', () => {
     try {
@@ -882,7 +998,16 @@ function dashboardContent(data: PanelDashboardData): HTMLElement {
       'CSV du jour, ou sauvegarde JSON des réglages et caches locaux (aucun secret, aucune ' +
         'donnée de session). La restauration ne réécrit que les clés connues.',
     ),
-    h('div', { class: 'kui-buy-actions' }, exportCsv, backupButton, importButton, restore),
+    h(
+      'div',
+      { class: 'kui-buy-actions' },
+      exportCsv,
+      exportHistoryCsv,
+      clearCacheButton,
+      backupButton,
+      importButton,
+      restore,
+    ),
     status,
     backupStatus,
     backupFile,
@@ -900,7 +1025,7 @@ function myListingsContent(data: PanelListingsData, context: ViewContext): HTMLE
     const auction = row.listing.type === 'auction';
     const relaunch = guardedButton('Relancer', 'Confirmer', () =>
       context.perform(`Relance de ${name}…`, async () => {
-        const result = await repriceListing(context.api, row.listing, row.listing.price, data.settings, {
+        const result = await gameActions.reprice(context.api, row.listing, row.listing.price, data.settings, {
           gapMs: 0,
           log: (message, kind) => void appendActivity(message, kind),
         });
@@ -1082,6 +1207,22 @@ function saleSettingsContent(
           save({ autoMaxPerPass: value }),
         ),
       ),
+      h(
+        'div',
+        { class: 'kui-note' },
+        'Vente auto : raretés mises en vente (les autres restent en collection)',
+      ),
+      ...AUTO_RARITIES.map((rarity) => {
+        const input = h('input', { type: 'checkbox' }) as HTMLInputElement;
+        input.checked = data.settings.autoRarities.includes(rarity.code);
+        input.addEventListener('change', () => {
+          const codes = new Set(data.settings.autoRarities);
+          if (input.checked) codes.add(rarity.code);
+          else codes.delete(rarity.code);
+          save({ autoRarities: AUTO_RARITIES.filter((r) => codes.has(r.code)).map((r) => r.code) });
+        });
+        return h('label', { class: 'kui-check' }, input, h('span', {}, rarity.label));
+      }),
       settingsField(
         'Tri',
         settingsSelect(
@@ -1144,6 +1285,12 @@ function tradeSettingsContent(
           save({ tradeLastGain: value }),
         ),
       ),
+      settingsField(
+        'Actualisation automatique du comptoir (minutes, 0 = jamais)',
+        settingsNumber(data.settings.tradeRefreshMin, 0, 60, (value) =>
+          save({ tradeRefreshMin: value }),
+        ),
+      ),
       check('tradeSameRarity', 'Exiger une rareté reçue au moins égale'),
       check('tradeUseLast', 'Autoriser à donner ma dernière copie'),
     ),
@@ -1173,7 +1320,7 @@ function listingsContent(data: PanelSaleData, context: ViewContext): HTMLElement
     }) as HTMLInputElement;
     const adjust = guardedButton('Ajuster', 'Confirmer', () =>
       context.perform(`Ajustement de ${name}…`, async () => {
-        const result = await repriceListing(
+        const result = await gameActions.reprice(
           context.api,
           listing,
           Number(price.value),
@@ -1195,7 +1342,7 @@ function listingsContent(data: PanelSaleData, context: ViewContext): HTMLElement
     }
     const cancel = guardedButton('Annuler', 'Confirmer', () =>
       context.perform(`Annulation de ${name}…`, async () => {
-        const result = await cancelListing(context.api, listing.id);
+                  const result = await gameActions.cancel(context.api, listing.id);
         if (!result.ok) throw new Error(result.message);
         void appendActivity(`Annonce de ${name} annulée.`, 'info');
         return `Annonce de ${name} annulée.`;
@@ -1384,8 +1531,10 @@ function saleContent(
     const name = candidate.name ?? `Carte #${candidate.id}`;
     const sell = guardedButton('Vendre', 'Confirmer', () =>
       context.perform(`Mise en vente de ${name}…`, async () => {
-        const placed = await sellNext(context.api, data.settings, [candidate], 1, {
+        const placed = await gameActions.sell(context.api, data.settings, [candidate], 1, {
           gapMs: 0,
+          listed: listedCounts(data.listings),
+          source: 'panneau Vente',
           log: (message, kind) => void appendActivity(message, kind),
         });
         if (!placed) {
@@ -1403,7 +1552,7 @@ function saleContent(
     }
     const recycle = guardedButton(`Recycler ×${fmt(candidate.sellable)}`, 'Confirmer', () =>
       context.perform(`Recyclage de ${name}…`, async () => {
-        const result = await recycleCard(context.api, candidate.id, candidate.sellable);
+        const result = await gameActions.recycle(context.api, candidate.id, candidate.sellable);
         if (!result.ok) throw new Error(`Recyclage refusé : ${result.message}`);
         void appendActivity(
           `${name} : ${fmt(candidate.sellable)} exemplaire(s) recyclé(s).`,
@@ -1422,7 +1571,7 @@ function saleContent(
         await sellSettingsItem.setValue(next);
         let warning = '';
         try {
-          const result = await pinCard(context.api, candidate.id, true);
+          const result = await gameActions.pin(context.api, candidate.id, true);
           if (!result.ok) warning = result.message;
         } catch (error) {
           warning = explainPanelError(error);
@@ -1487,9 +1636,11 @@ function saleContent(
       context.perform('Mise en vente des doublons sélectionnés…', async () => {
         const todo = fillSelection(data.candidates, data.free);
         if (!todo.length) throw new Error('Aucun doublon sélectionnable pour le moment.');
-        const placed = await sellNext(context.api, data.settings, todo, data.free, {
+        const placed = await gameActions.sell(context.api, data.settings, todo, data.free, {
           gapMs: 600,
           reason: 'vente groupée',
+          listed: listedCounts(data.listings),
+          source: 'panneau Vente (remplissage)',
           log: (message, kind) => void appendActivity(message, kind),
         });
         if (!placed) throw new Error('Kyara a refusé les mises en vente.');
@@ -1519,6 +1670,44 @@ function saleContent(
       ['Doublons', fmt(data.duplicates)],
       ['Vendables', fmt(data.sellable)],
     ]),
+    h('h3', { class: 'kui-section-title' }, 'Vente automatique'),
+    h(
+      'div',
+      { class: 'kui-metrics' },
+      metric(
+        'Mode',
+        !data.autoSell.enabled
+          ? 'Désactivée'
+          : (AUTOMATION_STATE[data.autoSell.status?.state ?? ''] ?? 'Active'),
+      ),
+      metric(
+        'Annonces actives',
+        data.autoSell.status?.active === null || data.autoSell.status?.active === undefined
+          ? '—'
+          : fmt(data.autoSell.status.active),
+      ),
+      metric('Créées', fmt(data.autoSell.status?.placed ?? 0)),
+      metric(
+        'Prochain passage',
+        data.autoSell.status?.nextAt ? atLabel(data.autoSell.status.nextAt) : '—',
+      ),
+    ),
+    h(
+      'p',
+      { class: 'kui-note' },
+      !data.autoSell.enabled
+        ? 'Active la vente automatique dans l’onglet Réglages.'
+        : data.autoSell.status
+          ? data.autoSell.status.message
+          : 'Aucun passage enregistré : garde un onglet kyara.games ouvert.',
+    ),
+    data.autoSell.log.length
+      ? h(
+          'ul',
+          { class: 'kui-activity-log' },
+          ...data.autoSell.log.map((entry) => h('li', {}, `${atLabel(entry.t)} · ${entry.m}`)),
+        )
+      : null,
     h('h3', { class: 'kui-section-title' }, 'Vendre un doublon'),
     h(
       'p',
@@ -1538,7 +1727,7 @@ function acceptDealButton(
 ): HTMLButtonElement {
   return guardedButton('Accepter', 'Confirmer', () =>
     context.perform('Acceptation de l’échange…', async () => {
-      await acceptTrade(context.api, deal.offerId, deal.giveId);
+      await gameActions.acceptTrade(context.api, deal.offerId, deal.giveId);
       void appendActivity(`Échange accepté : ${deal.leftName} a rejoint ta collection.`, 'sale');
       return `Échange accepté : ${deal.leftName} rejoint ta collection.`;
     }),
@@ -1740,14 +1929,35 @@ function buyContent(data: PanelBuyData, context: ViewContext): HTMLElement {
   // État partagé entre les onglets : une recherche lancée n'est pas perdue en changeant d'onglet.
   const fixed = {
     max: 500,
+    /** Rareté demandée au site ; vide = toutes. */
+    rarity: '',
     listings: [] as MarketListing[],
+    /** Résultat cumulé, pour prolonger une lecture partielle sans perdre les pages lues. */
+    result: null as MarketSearchResult | null,
     selected: new Set<string>(),
+    /** Dernière page lue et avancement de la lecture. */
+    page: 0,
+    scanned: 0,
+    total: null as number | null,
+    complete: false,
+    /** Filtre local : masquer les cartes déjà possédées. */
+    hideOwned: false,
+    /** Cartes manquantes demandées au site (`missing=1`). */
+    missingOnly: false,
+    /** Lecture complète en cours et demande d'arrêt. */
+    readingAll: false,
+    cancel: false,
+    busy: false,
     loaded: false,
   };
   const auction = {
     listings: [] as MarketListing[],
     max: new Map<string, number>(),
     loaded: false,
+    /** Miser dans la dernière minute plutôt que tout de suite. */
+    snipe: false,
+    /** Minuteries des mises programmées, annulables depuis le panneau. */
+    timers: [] as number[],
   };
   const orders = {
     rarity: '',
@@ -1761,6 +1971,39 @@ function buyContent(data: PanelBuyData, context: ViewContext): HTMLElement {
     busy: false,
   };
 
+  /** Lignes affichées au plus ; les groupes de prix restent toujours entiers. */
+  const FIXED_RENDER_LIMIT = 200;
+
+  /** Regroupe les annonces par prix, du moins cher au plus cher. */
+  function groupByPrice(
+    listings: readonly MarketListing[],
+  ): { price: number; items: MarketListing[] }[] {
+    const groups = new Map<number, MarketListing[]>();
+    for (const listing of listings) {
+      const items = groups.get(listing.price);
+      if (items) items.push(listing);
+      else groups.set(listing.price, [listing]);
+    }
+    return [...groups.entries()]
+      .sort(([left], [right]) => left - right)
+      .map(([price, items]) => ({
+        price,
+        items: items.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', 'fr')),
+      }));
+  }
+
+  /** Passes au plus pour « Tout lire » (≈ 4 800 pages). */
+  const MAX_MARKET_PASSES = 600;
+
+  /** Durée lisible : « 40 s », « 2 min 10 s ». */
+  function formatEta(ms: number): string {
+    const seconds = Math.max(1, Math.round(ms / 1_000));
+    if (seconds < 60) return `${seconds} s`;
+    const minutes = Math.floor(seconds / 60);
+    const rest = seconds % 60;
+    return rest ? `${minutes} min ${rest} s` : `${minutes} min`;
+  }
+
   const fixedBox = (): HTMLElement => {
     const max = h('input', {
       type: 'number',
@@ -1770,83 +2013,479 @@ function buyContent(data: PanelBuyData, context: ViewContext): HTMLElement {
       value: String(fixed.max),
       'aria-label': 'Prix maximum par carte',
     }) as HTMLInputElement;
-    const rowsHost = h('div', { class: 'kui-rows' });
+    max.addEventListener('change', () => {
+      fixed.max = Math.max(1, Math.round(Number(max.value) || 1));
+      max.value = String(fixed.max);
+      renderRows();
+    });
+    const rarity = settingsSelect(
+      fixed.rarity,
+      BUY_RARITIES.map(([value, label]) => [value, label]),
+      (value) => {
+        fixed.rarity = value;
+        resetFixed();
+        paint();
+        say('Rareté choisie : relance l’analyse du marché.');
+      },
+    );
+    const checkField = (
+      label: string,
+      checked: boolean,
+      onChange: (value: boolean) => void,
+    ): HTMLElement => {
+      const input = h('input', { type: 'checkbox' }) as HTMLInputElement;
+      input.checked = checked;
+      input.addEventListener('change', () => onChange(input.checked));
+      return h('label', { class: 'kui-field kui-check-field' }, input, h('span', {}, label));
+    };
+    const hideOwned = checkField('Masquer les possédées', fixed.hideOwned, (value) => {
+      fixed.hideOwned = value;
+      renderRows();
+    });
+    const missingOnly = checkField('Cartes manquantes', fixed.missingOnly, (value) => {
+      fixed.missingOnly = value;
+      resetFixed();
+      paint();
+      say(
+        value
+          ? 'Cartes manquantes : relance l’analyse du marché.'
+          : 'Analyse élargie à toutes les cartes : relance-la.',
+      );
+    });
+    const rowsHost = h('div', { class: 'kui-rows kui-price-groups' });
+    const summary = h('span', { class: 'kui-selection-summary' });
+    let renderedIds: string[] = [];
+    let groupChecks: { check: HTMLInputElement; ids: string[] }[] = [];
+    let rowChecks: { check: HTMLInputElement; id: string }[] = [];
+
     const buy = guardedButton('Acheter la sélection', 'Confirmer', () => {
-      const lines = fixed.listings
-        .filter((listing) => fixed.selected.has(listing.id))
-        .map((listing) => ({ id: listing.id, name: listing.name, price: listing.price }));
+      const lines = chosenLines();
       if (!lines.length) return;
-      say(`Achat de ${fmt(lines.length)} annonce(s)…`);
+      const total = lines.reduce((sum, line) => sum + line.price, 0);
+      fixed.busy = true;
+      buy.disabled = true;
+      say(`Achat de ${fmt(lines.length)} annonce(s) · ${fmt(total)} ◆…`);
       void buyListings(context.api, lines, {
         gapMs: 1_200,
-        onProgress: (done, total, spent) =>
-          say(`Achat ${fmt(done)} / ${fmt(total)} · ${fmt(spent)} ◆`),
+        onBuy: async (line, outcome) => {
+          // Écriture attendue : plusieurs achats d'affilée ne doivent pas se perdre.
+          await recordPurchaseEntry({
+            characterId: line.characterId ?? 0,
+            name: line.name ?? null,
+            price: outcome.paid ?? line.price,
+            kind: 'listing',
+            listingId: line.id,
+          });
+        },
+        onProgress: (done, count, spent) =>
+          say(`Achat ${fmt(done)} / ${fmt(count)} · ${fmt(spent)} ◆`),
       })
         .then((result) => {
           say(
             `Achats : ${fmt(result.bought)} réussie(s) · ${fmt(result.spent)} ◆` +
-              (result.stop ? ` · arrêt : ${result.stop}` : ''),
+              (result.stop ? ` · arrêt : ${result.stop}` : '') +
+              ' · relance l’analyse pour actualiser la liste.',
           );
           fixed.selected.clear();
+          fixed.busy = false;
           paint();
         })
-        .catch((error: unknown) => say(`Achat impossible : ${explainPanelError(error)}`));
-    });
-    buy.disabled = fixed.selected.size === 0;
-    const search = trustedButton('Chercher les prix fixes', () => {
-      search.disabled = true;
-      say('Lecture des annonces à prix fixe…');
-      void searchMarket(context.api, { sort: 'newest' }, { noAuction: true, order: 'deal', maxPages: 4 })
-        .then((result) => {
-          fixed.listings = result.listings.filter(
-            (listing) => listing.price <= fixed.max && !data.ownedIds.has(listing.characterId),
-          );
-          fixed.loaded = true;
-          fixed.selected.clear();
-          say(`${fmt(fixed.listings.length)} annonce(s) sous ${fmt(fixed.max)} ◆.`);
+        .catch((error: unknown) => {
+          fixed.busy = false;
+          say(`Achat impossible : ${explainPanelError(error)}`);
           paint();
-        })
-        .catch((error: unknown) => say(`Recherche impossible : ${explainPanelError(error)}`));
+        });
     });
-    for (const listing of fixed.listings.slice(0, 40)) {
-      const check = h('input', { type: 'checkbox' }) as HTMLInputElement;
-      check.checked = fixed.selected.has(listing.id);
-      check.addEventListener('change', () => {
-        if (check.checked) fixed.selected.add(listing.id);
-        else fixed.selected.delete(listing.id);
-        buy.disabled = fixed.selected.size === 0;
-      });
-      rowsHost.append(
-        h(
-          'div',
-          { class: 'kui-data-row' },
-          cardThumb(listing.characterId),
-          h(
-            'div',
-            { class: 'kui-row-main' },
-            h('b', {}, listing.name ?? `Carte #${listing.characterId}`),
-            h(
-              'small',
-              {},
-              `${fmt(listing.price)} ◆ · ${listing.series ?? 'sans série'} · ${formatEndsIn(listing.endsAt) ?? 'sans fin'}`,
-            ),
-          ),
-          check,
-        ),
+    const selectAll = trustedButton('Tout sélectionner', () => {
+      for (const id of renderedIds) fixed.selected.add(id);
+      syncSelection();
+    });
+    const clearAll = trustedButton('Tout désélectionner', () => {
+      fixed.selected.clear();
+      syncSelection();
+    });
+    const more = trustedButton('Lire la suite', () => analyze(true));
+    const search = trustedButton('Analyser le marché', () => analyze(false));
+    const readAll = trustedButton('Tout lire', () => readEverything());
+    const stop = trustedButton('Arrêter', () => {
+      fixed.cancel = true;
+      say('Arrêt demandé : la passe en cours se termine.');
+    });
+
+    /** Vrai quand l'annonce passe les filtres locaux (prix, rareté, possession). */
+    function shows(listing: MarketListing): boolean {
+      return (
+        listing.price <= fixed.max &&
+        (!fixed.rarity || rarityCode(listing.rarity) === fixed.rarity) &&
+        (!fixed.hideOwned || !data.ownedIds.has(listing.characterId))
       );
     }
+
+    /**
+     * Une seule annonce par carte : la moins chère, puis la fin la plus proche. Acheter
+     * plusieurs exemplaires de la même carte n'a pas d'intérêt pour compléter un album.
+     */
+    function bestPerCard(): MarketListing[] {
+      const best = new Map<number, MarketListing>();
+      for (const listing of fixed.listings) {
+        if (!shows(listing)) continue;
+        const current = best.get(listing.characterId);
+        if (
+          !current ||
+          listing.price < current.price ||
+          (listing.price === current.price && (listing.endsAt ?? '') < (current.endsAt ?? ''))
+        ) {
+          best.set(listing.characterId, listing);
+        }
+      }
+      return [...best.values()];
+    }
+
+    function chosenLines(): {
+      id: string;
+      name?: string | null;
+      price: number;
+      characterId: number;
+    }[] {
+      // Seules les annonces affichées comptent : baisser le prix max ou changer de
+      // rareté retire de la sélection ce qui n'est plus visible.
+      return bestPerCard()
+        .filter((listing) => fixed.selected.has(listing.id))
+        .map((listing) => ({
+          id: listing.id,
+          name: listing.name,
+          price: listing.price,
+          characterId: listing.characterId,
+        }));
+    }
+
+    function updateSelection(): void {
+      const chosen = chosenLines();
+      const total = chosen.reduce((sum, line) => sum + line.price, 0);
+      summary.textContent = chosen.length
+        ? `${fmt(chosen.length)} annonce(s) sélectionnée(s) · ${fmt(total)} ◆`
+        : 'Aucune annonce sélectionnée.';
+      buy.disabled = fixed.busy || chosen.length === 0;
+      clearAll.disabled = fixed.busy || chosen.length === 0;
+      selectAll.disabled =
+        fixed.busy || renderedIds.length === 0 || renderedIds.every((id) => fixed.selected.has(id));
+    }
+
+    function syncSelection(): void {
+      for (const item of rowChecks) item.check.checked = fixed.selected.has(item.id);
+      for (const group of groupChecks) {
+        const all = group.ids.every((id) => fixed.selected.has(id));
+        const some = group.ids.some((id) => fixed.selected.has(id));
+        group.check.checked = all;
+        group.check.indeterminate = some && !all;
+      }
+      updateSelection();
+    }
+
+    /** Couverture honnête de la lecture : annonces lues, total annoncé et état. */
+    function coverage(): string {
+      const shown = bestPerCard().length;
+      const rarityLabel = BUY_RARITIES.find(([value]) => value === fixed.rarity)?.[1];
+      const scope = [rarityLabel, fixed.missingOnly ? 'cartes manquantes' : '']
+        .filter(Boolean)
+        .join(' · ');
+      const suffix = scope ? ` · ${scope}` : '';
+      if (fixed.total === null) {
+        return `${fmt(shown)} annonce(s)${suffix} · ${fmt(fixed.scanned)} lue(s) · total annoncé inconnu`;
+      }
+      const percent = fixed.total
+        ? fixed.scanned > 0
+          ? Math.max(1, Math.min(100, Math.round((fixed.scanned / fixed.total) * 100)))
+          : 0
+        : 100;
+      return (
+        `${fmt(shown)} annonce(s) sous ${fmt(fixed.max)} ◆${suffix} · ` +
+        `${fmt(fixed.scanned)} / ${fmt(fixed.total)} annonce(s) lue(s) (${percent} %)` +
+        (fixed.complete ? ' · analyse complète' : ' · lecture partielle')
+      );
+    }
+
+    function resetFixed(): void {
+      fixed.result = null;
+      fixed.listings = [];
+      fixed.selected.clear();
+      fixed.page = 0;
+      fixed.scanned = 0;
+      fixed.total = null;
+      fixed.complete = false;
+      fixed.loaded = false;
+    }
+
+    function renderRows(): void {
+      renderedIds = [];
+      groupChecks = [];
+      rowChecks = [];
+      rowsHost.replaceChildren();
+      if (!fixed.loaded) {
+        rowsHost.append(
+          h('p', { class: 'kui-note' }, 'Lance l’analyse pour lire les annonces à prix fixe.'),
+        );
+        updateSelection();
+        return;
+      }
+      const shown = bestPerCard();
+      if (!shown.length) {
+        rowsHost.append(
+          h(
+            'p',
+            { class: 'kui-note' },
+            'Aucune carte avec ces filtres : élargis le prix max ou décoche une option.',
+          ),
+        );
+        updateSelection();
+        return;
+      }
+      let painted = 0;
+      let hidden = 0;
+      for (const group of groupByPrice(shown)) {
+        if (painted >= FIXED_RENDER_LIMIT) {
+          hidden += group.items.length;
+          continue;
+        }
+        painted += group.items.length;
+        const ids = group.items.map((listing) => listing.id);
+        const groupCheck = h('input', {
+          type: 'checkbox',
+          'aria-label': `Toutes les annonces à ${fmt(group.price)} ◆`,
+        }) as HTMLInputElement;
+        groupCheck.checked = ids.every((id) => fixed.selected.has(id));
+        groupCheck.indeterminate = !groupCheck.checked && ids.some((id) => fixed.selected.has(id));
+        groupCheck.addEventListener('change', () => {
+          if (groupCheck.checked) for (const id of ids) fixed.selected.add(id);
+          else for (const id of ids) fixed.selected.delete(id);
+          syncSelection();
+        });
+        groupChecks.push({ check: groupCheck, ids });
+        const rows = group.items.map((listing) => {
+          const check = h('input', { type: 'checkbox' }) as HTMLInputElement;
+          check.checked = fixed.selected.has(listing.id);
+          check.setAttribute(
+            'aria-label',
+            `Acheter ${listing.name ?? `la carte #${listing.characterId}`} à ${fmt(listing.price)} ◆`,
+          );
+          check.addEventListener('change', () => {
+            if (check.checked) fixed.selected.add(listing.id);
+            else fixed.selected.delete(listing.id);
+            syncSelection();
+          });
+          rowChecks.push({ check, id: listing.id });
+          renderedIds.push(listing.id);
+          const rarity = rarityCode(listing.rarity);
+          const owned = data.ownedIds.has(listing.characterId);
+          return h(
+            'div',
+            { class: 'kui-data-row' },
+            cardThumb(listing.characterId),
+            h(
+              'div',
+              { class: 'kui-row-main' },
+              h('b', {}, listing.name ?? `Carte #${listing.characterId}`),
+              h(
+                'small',
+                {},
+                `${rarity ? `${rarity} · ` : ''}${listing.series ?? 'sans série'} · ` +
+                  `${formatEndsIn(listing.endsAt) ?? 'sans fin'}` +
+                  (listing.median ? ` · médiane ${fmt(listing.median)} ◆` : ''),
+              ),
+            ),
+            owned ? h('span', { class: 'kui-chip kui-chip-muted' }, 'possédée') : null,
+            check,
+          );
+        });
+        rowsHost.append(
+          h(
+            'div',
+            { class: 'kui-price-group', 'data-price': String(group.price) },
+            h(
+              'div',
+              { class: 'kui-price-group-head' },
+              h('b', {}, `${fmt(group.price)} ◆`),
+              h(
+                'span',
+                { class: 'kui-note' },
+                `${fmt(ids.length)} annonce(s) · ${fmt(group.price * ids.length)} ◆ au total`,
+              ),
+              h(
+                'label',
+                { class: 'kui-price-group-toggle' },
+                groupCheck,
+                h('span', {}, 'Tout ce prix'),
+              ),
+            ),
+            ...rows,
+          ),
+        );
+      }
+      if (hidden) {
+        rowsHost.append(
+          h(
+            'p',
+            { class: 'kui-note' },
+            `${fmt(hidden)} annonce(s) au-delà de ${fmt(FIXED_RENDER_LIMIT)} lignes : ` +
+              'réduis le prix max ou choisis une rareté.',
+          ),
+        );
+      }
+      updateSelection();
+    }
+
+    /** Lit une passe de pages ; ne touche ni à `busy` ni au rendu. */
+    async function readPass(extend: boolean): Promise<void> {
+      const startPage = extend ? fixed.page + 1 : 1;
+      const startedAt = Date.now();
+      const result = await searchMarket(
+        context.api,
+        {
+          sort: 'newest',
+          ...(fixed.rarity ? { rarity: fixed.rarity } : {}),
+          ...(fixed.missingOnly ? { missing: true } : {}),
+        },
+        {
+          noAuction: true,
+          order: 'deal',
+          maxPages: MARKET_MAX_PAGES,
+          startPage,
+          onPage: (_fresh, page, total) => {
+            // En prolongement, l'estimation ne compte que les pages de la passe en
+            // cours : le débit des pages déjà lues avant « Lire la suite » ne doit
+            // pas gonfler l'avancement annoncé pendant la nouvelle passe.
+            const { scanned, remainingMs } = estimatePassRemaining({
+              page,
+              startPage,
+              total,
+              elapsedMs: Date.now() - startedAt,
+            });
+            say(
+              `Lecture : ${fmt(scanned)} / ${total === null ? '?' : fmt(total)} annonce(s)` +
+                (remainingMs > 1_000 ? ` · ≈ ${formatEta(remainingMs)} restantes` : ''),
+            );
+          },
+        },
+      );
+      fixed.result = fixed.result
+        ? mergeSearchResults(fixed.result, result, { noAuction: true })
+        : result;
+      fixed.listings = fixed.result.listings;
+      fixed.page = Math.max(fixed.page, result.pages);
+      fixed.scanned = Math.min(
+        fixed.result.total ?? Number.POSITIVE_INFINITY,
+        fixed.result.scanned ?? result.pages * MARKET_PAGE_SIZE,
+      );
+      fixed.total = fixed.result.total;
+      fixed.complete = fixed.result.complete;
+      fixed.loaded = true;
+    }
+
+    /** Une passe de huit pages, avec le bouton d'origine. */
+    function analyze(extend: boolean): void {
+      if (fixed.busy) return;
+      fixed.busy = true;
+      fixed.readingAll = false;
+      fixed.cancel = false;
+      if (!extend) resetFixed();
+      paint();
+      say(extend ? 'Lecture de la suite du marché…' : 'Analyse du marché…');
+      void readPass(extend)
+        .then(() => {
+          fixed.busy = false;
+          paint();
+          say(coverage());
+        })
+        .catch((error: unknown) => {
+          fixed.busy = false;
+          say(`Analyse impossible : ${explainPanelError(error)}`);
+          paint();
+        });
+    }
+
+    /**
+     * Analyse complète en une action : enchaîne les passes jusqu'au total annoncé,
+     * en affichant les résultats à chaque passe. L'arrêt prend effet à la fin de la
+     * passe en cours, ou tout de suite après deux passes sans nouveau résultat.
+     */
+    function readEverything(): void {
+      if (fixed.busy) return;
+      resetFixed();
+      fixed.busy = true;
+      fixed.readingAll = true;
+      fixed.cancel = false;
+      paint();
+      say('Analyse complète du marché : première passe…');
+      void (async () => {
+        let passes = 0;
+        let empty = 0;
+        while (!fixed.cancel && !fixed.complete && passes < MAX_MARKET_PASSES) {
+          const before = fixed.listings.length;
+          await readPass(passes > 0);
+          passes += 1;
+          empty = fixed.listings.length > before ? 0 : empty + 1;
+          paint();
+          say(
+            `Analyse complète · passe ${fmt(passes)} · ${coverage()}` +
+              (fixed.complete ? '' : ' · Arrêter pour interrompre'),
+          );
+          if (empty >= 2) break;
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+        fixed.busy = false;
+        fixed.readingAll = false;
+        paint();
+        say(
+          fixed.complete
+            ? `Analyse complète terminée · ${coverage()}`
+            : fixed.cancel
+              ? `Analyse arrêtée · ${coverage()}`
+              : `Analyse arrêtée faute de nouveaux résultats · ${coverage()}`,
+        );
+      })().catch((error: unknown) => {
+        fixed.busy = false;
+        fixed.readingAll = false;
+        say(`Analyse impossible : ${explainPanelError(error)}`);
+        paint();
+      });
+    }
+
+    search.disabled = fixed.busy;
+    readAll.disabled = fixed.busy;
+    more.disabled = fixed.busy || !fixed.loaded || fixed.complete;
+    renderRows();
     return h(
       'div',
       {},
       h(
         'p',
         { class: 'kui-note' },
-        'Annonces à prix fixe sous ton plafond, triées par meilleure affaire. Coche les cartes puis confirme : achat une par une, 1,2 s d’écart.',
+        'Analyse du marché à prix fixe, page par page (48 annonces, 8 pages par passe) : ' +
+          'rareté, cartes manquantes et possession en filtres, annonces lues sur le total ' +
+          'annoncé, temps restant estimé. Une seule annonce par carte est affichée : la moins ' +
+          'chère. « Tout lire » enchaîne les passes jusqu’au bout ; coche des cartes, ou tout ' +
+          'un prix d’un clic, puis confirme : achat une par une.',
       ),
-      h('div', { class: 'kui-buy-tools' }, settingsField('Prix max.', max), search, buy),
-      fixed.loaded && !fixed.listings.length
-        ? h('p', { class: 'kui-note' }, 'Aucune annonce sous ce plafond pour le moment.')
-        : rowsHost,
+      h(
+        'div',
+        { class: 'kui-buy-tools' },
+        settingsField('Prix max.', max),
+        settingsField('Rareté', rarity),
+        missingOnly,
+        hideOwned,
+        search,
+        readAll,
+        fixed.readingAll ? stop : null,
+        fixed.loaded && !fixed.complete && !fixed.readingAll ? more : null,
+      ),
+      fixed.loaded ? h('p', { class: 'kui-note kui-buy-coverage' }, coverage()) : null,
+      h(
+        'div',
+        { class: 'kui-selection-bar' },
+        summary,
+        h('div', { class: 'kui-selection-actions' }, selectAll, clearAll, buy),
+      ),
+      rowsHost,
     );
   };
 
@@ -1856,7 +2495,7 @@ function buyContent(data: PanelBuyData, context: ViewContext): HTMLElement {
       search.disabled = true;
       say('Lecture des enchères…');
       void searchMarket(context.api, { sort: 'ending' }, { order: 'ending', maxPages: 3 })
-        .then((result) => {
+        .then(async (result) => {
           auction.listings = result.listings.filter(
             (listing) => listing.auction && !data.ownedIds.has(listing.characterId),
           );
@@ -1867,22 +2506,106 @@ function buyContent(data: PanelBuyData, context: ViewContext): HTMLElement {
             }
           }
           say(`${fmt(auction.listings.length)} enchère(s) ouverte(s).`);
+          // Une carte arrivée dans la collection confirme l'enchère qui l'a emportée.
+          const confirmed = await confirmAuctions().catch(() => 0);
+          if (confirmed) say(`${fmt(confirmed)} enchère(s) gagnée(s) notée(s) dans les dépenses.`);
           paint();
         })
         .catch((error: unknown) => say(`Recherche impossible : ${explainPanelError(error)}`));
     });
+    /**
+     * Note une mise en tête : c'est de l'argent engagé, pas une enchère gagnée. Le journal
+     * la garde en attente (une seule ligne par annonce) jusqu'à ce que la carte arrive
+     * dans la collection, seule preuve locale d'une victoire.
+     */
+    async function recordAuctionBid(
+      listingId: string,
+      characterId: number | undefined,
+      name: string | null,
+      outcome: { leading: boolean; currentBid: number | null },
+      maxAmount: number,
+    ): Promise<void> {
+      if (!outcome.leading) return;
+      await recordPurchaseEntry({
+        characterId: characterId ?? 0,
+        name,
+        price: outcome.currentBid ?? maxAmount,
+        kind: 'auction',
+        listingId,
+        pending: true,
+      });
+    }
+
+    /** Confirme les enchères dont la carte est maintenant possédée. */
+    async function confirmAuctions(): Promise<number> {
+      const stored = normalizePurchases(await purchasesItem.getValue().catch(() => null));
+      const { purchases, confirmed } = confirmWonAuctions(stored, data.ownedIds);
+      if (!confirmed.length) return 0;
+      await purchasesItem.setValue(purchases).catch(() => undefined);
+      return confirmed.length;
+    }
+
+    /** Programme une mise pour la dernière minute de l'enchère, sans bloquer le panneau. */
+    function scheduleSnipes(
+      lines: { id: string; characterId: number; name: string | null; endsAt: string | null; maxAmount: number }[],
+    ): void {
+      let planned = 0;
+      for (const line of lines) {
+        const delay = snipeDelay(line.endsAt);
+        if (delay === null) {
+          say(`${line.name ?? `Carte #${line.id}`} : échéance inconnue, mise immédiate impossible à programmer.`);
+          continue;
+        }
+        planned += 1;
+        const timer = window.setTimeout(() => {
+          auction.timers = auction.timers.filter((id) => id !== timer);
+          void (async () => {
+            // Le plafond du jour est relu au moment de la mise, pas à la programmation.
+            const refus = spendProblem(await loadDaySpend(), line.maxAmount);
+            if (refus) {
+              say(`${line.name ?? `Carte #${line.id}`} : ${refus}`);
+              paint();
+              return;
+            }
+            const outcome = await bidListing(context.api, line.id, line.maxAmount);
+            if (outcome.ok) {
+              await recordAuctionBid(line.id, line.characterId, line.name, outcome, line.maxAmount);
+            }
+            say(`${line.name ?? `Carte #${line.id}`} : ${outcome.message}`);
+            paint();
+          })().catch((error: unknown) => say(`Mise impossible : ${explainPanelError(error)}`));
+        }, delay);
+        auction.timers.push(timer);
+      }
+      say(
+        `${fmt(planned)} mise(s) programmée(s) dans la dernière minute — garde cet onglet ouvert.`,
+      );
+      paint();
+    }
+
     const bid = guardedButton('Miser sur la sélection', 'Confirmer', () => {
       const lines = auction.listings
         .filter((listing) => auction.max.has(listing.id))
         .map((listing) => ({
           id: listing.id,
+          characterId: listing.characterId,
           name: listing.name,
+          endsAt: listing.endsAt,
           maxAmount: auction.max.get(listing.id) ?? listing.price,
         }));
       if (!lines.length) return;
+      if (auction.snipe) {
+        scheduleSnipes(lines);
+        return;
+      }
       say(`Mise sur ${fmt(lines.length)} enchère(s)…`);
       void bidListings(context.api, lines, {
         gapMs: 1_500,
+        // Même plafond du jour que les achats directs et les ordres d'achat.
+        checkBid: async (line) => spendProblem(await loadDaySpend(), line.maxAmount),
+        onBid: async (line, outcome) => {
+          await recordAuctionBid(line.id, line.characterId, line.name ?? null, outcome, line.maxAmount);
+        },
         onProgress: (done, total, spent) =>
           say(`Mise ${fmt(done)} / ${fmt(total)} · ${fmt(spent)} ◆ engagés`),
       })
@@ -1894,6 +2617,23 @@ function buyContent(data: PanelBuyData, context: ViewContext): HTMLElement {
           paint();
         })
         .catch((error: unknown) => say(`Mise impossible : ${explainPanelError(error)}`));
+    });
+    const snipeToggle = h('input', { type: 'checkbox' }) as HTMLInputElement;
+    snipeToggle.checked = auction.snipe;
+    snipeToggle.addEventListener('change', () => {
+      auction.snipe = snipeToggle.checked;
+      paint();
+    });
+    const cancelSnipes = h(
+      'button',
+      { type: 'button', class: 'kui-secondary kui-auction-cancel-snipes', hidden: !auction.timers.length },
+      `Annuler les mises programmées (${fmt(auction.timers.length)})`,
+    ) as HTMLButtonElement;
+    cancelSnipes.addEventListener('click', () => {
+      for (const timer of auction.timers) window.clearTimeout(timer);
+      auction.timers = [];
+      say('Mises programmées annulées.');
+      paint();
     });
     for (const listing of auction.listings.slice(0, 30)) {
       const max = h('input', {
@@ -1934,7 +2674,29 @@ function buyContent(data: PanelBuyData, context: ViewContext): HTMLElement {
         { class: 'kui-note' },
         'Mise maximale : Kyara surenchérit pour toi jusqu’à ce plafond. Une mise par enchère, 1,5 s d’écart.',
       ),
-      h('div', { class: 'kui-buy-tools' }, search, bid),
+      h(
+        'div',
+        { class: 'kui-buy-tools' },
+        h(
+          'label',
+          {
+            class: 'kui-market-check kui-auction-snipe',
+            title: 'Attendre la dernière minute pour miser, avec le plafond saisi',
+          },
+          snipeToggle,
+          h('span', {}, 'Miser dans la dernière minute'),
+        ),
+        search,
+        bid,
+        cancelSnipes,
+      ),
+      auction.snipe
+        ? h(
+            'p',
+            { class: 'kui-note' },
+            'Mode dernière minute : chaque mise part 60 s avant la fin, au plafond saisi. Les minuteries vivent dans cet onglet ; le fermer annule les mises non parties.',
+          )
+        : null,
       auction.loaded && !auction.listings.length
         ? h('p', { class: 'kui-note' }, 'Aucune enchère ouverte pour le moment.')
         : rowsHost,
@@ -2022,6 +2784,8 @@ function buyContent(data: PanelBuyData, context: ViewContext): HTMLElement {
     delayMax.addEventListener('change', readDelay);
 
     const cardsHost = h('div', { class: 'kui-rows' });
+    /** Recâblé après la création des boutons : cocher une carte les active aussitôt. */
+    let refreshSelection = (): void => {};
     const visible = data.missing
       .filter((card) => !orders.rarity || card.rarity === orders.rarity)
       .slice(0, 60);
@@ -2031,6 +2795,7 @@ function buyContent(data: PanelBuyData, context: ViewContext): HTMLElement {
       check.addEventListener('change', () => {
         if (check.checked) orders.selected.add(card.id);
         else orders.selected.delete(card.id);
+        refreshSelection();
       });
       const floor = minPrice(card.rarity);
       const override = orders.overrides.get(card.id);
@@ -2067,33 +2832,58 @@ function buyContent(data: PanelBuyData, context: ViewContext): HTMLElement {
         ),
       );
     }
+    const selectAllOrders = trustedButton('Tout cocher', () => {
+      for (const card of data.missing) {
+        if (!orders.rarity || card.rarity === orders.rarity) orders.selected.add(card.id);
+      }
+      paint();
+    });
+    const clearOrders = trustedButton('Tout décocher', () => {
+      orders.selected.clear();
+      paint();
+    });
+    /**
+     * Construit les brouillons (prix auto ou saisi) pour les cartes cochées, avec la
+     * médiane connue : la file s'en sert pour trier par marge et signaler une dérive.
+     */
+    async function buildDrafts(
+      ids: readonly number[],
+    ): Promise<{ drafts: BuyOrderDraft[]; medians: Map<number, number> }> {
+      const fair = await fetchFairPrices(context.api, [...ids]).catch(
+        () => new Map<number, number>(),
+      );
+      const drafts: BuyOrderDraft[] = [];
+      const medians = new Map<number, number>();
+      for (const card of data.missing) {
+        if (!ids.includes(card.id)) continue;
+        const floor = minPrice(card.rarity);
+        const median = fair.get(card.id) ?? 0;
+        if (median > 0) medians.set(card.id, median);
+        let price = orders.overrides.get(card.id) ?? 0;
+        if (!price) {
+          if (orders.strategy === 'fixed') price = orders.fixed;
+          else if (!median) price = 0;
+          else if (orders.strategy === 'm20') price = Math.floor(median * 0.8);
+          else if (orders.strategy === 'best1') {
+            const best = await bestBuyBid(context.api, card.id);
+            price = best > 0 ? Math.min(best + 1, Math.round(median)) : Math.floor(median * 0.8);
+          } else price = Math.round(median);
+        }
+        price = Math.max(floor, Math.round(price));
+        if (price > 0) {
+          drafts.push({ characterId: card.id, name: card.name, price, qty: 1 });
+        }
+      }
+      return { drafts, medians };
+    }
+
     const place = guardedButton('Placer les ordres', 'Confirmer', () => {
-      const ids = [...orders.selected].slice(0, 20);
+      const ids = [...orders.selected];
       if (!ids.length) return;
       orders.busy = true;
       say(`Préparation de ${fmt(ids.length)} ordre(s)…`);
       void (async () => {
-        const fair = await fetchFairPrices(context.api, ids).catch(() => new Map<number, number>());
-        const drafts = [];
-        for (const card of data.missing) {
-          if (!ids.includes(card.id)) continue;
-          const floor = minPrice(card.rarity);
-          const median = fair.get(card.id) ?? 0;
-          let price = orders.overrides.get(card.id) ?? 0;
-          if (!price) {
-            if (orders.strategy === 'fixed') price = orders.fixed;
-            else if (!median) price = 0;
-            else if (orders.strategy === 'm20') price = Math.floor(median * 0.8);
-            else if (orders.strategy === 'best1') {
-              const best = await bestBuyBid(context.api, card.id);
-              price = best > 0 ? Math.min(best + 1, Math.round(median)) : Math.floor(median * 0.8);
-            } else price = Math.round(median);
-          }
-          price = Math.max(floor, Math.round(price));
-          if (price > 0) {
-            drafts.push({ characterId: card.id, name: card.name, price, qty: 1 });
-          }
-        }
+        const { drafts } = await buildDrafts(ids);
         if (!drafts.length) {
           say('Aucun prix exploitable : relance l’analyse ou choisis une autre stratégie.');
           return;
@@ -2106,7 +2896,8 @@ function buyContent(data: PanelBuyData, context: ViewContext): HTMLElement {
         say(
           `Ordres : ${fmt(result.placed)} placé(s) · ${fmt(result.total)} ◆` +
             (result.filled ? ` · ${fmt(result.filled)} achat(s) immédiat(s)` : '') +
-            (result.stop ? ` · arrêt : ${result.stop}` : ''),
+            (result.stop ? ` · arrêt : ${result.stop}` : '') +
+            ' · le reste peut attendre dans la file de l’extension.',
         );
         void context.reload?.();
       })()
@@ -2115,10 +2906,183 @@ function buyContent(data: PanelBuyData, context: ViewContext): HTMLElement {
           orders.busy = false;
         });
     });
-    place.disabled = orders.selected.size === 0 || orders.busy;
+
+
+    /** Ajoute la sélection à la file locale : rien n'est envoyé au site ici. */
+    const enqueue = trustedButton('Ajouter à la file', () => {
+      const ids = [...orders.selected];
+      if (!ids.length) return;
+      void (async () => {
+        const { drafts, medians } = await buildDrafts(ids);
+        if (!drafts.length) {
+          say('Aucun prix exploitable pour la file : vérifie la stratégie et la rareté.');
+          return;
+        }
+        const next = enqueueOrders(await orderQueueItem.getValue(), drafts, Date.now(), medians);
+        await orderQueueItem.setValue(next);
+        say(
+          `${fmt(drafts.length)} ordre(s) dans la file · ${fmt(next.entries.length)} en attente` +
+            ` · ${fmt(queuedTotal(next))} ◆ à engager.`,
+        );
+        void appendActivity(
+          `File d’ordres : ${fmt(drafts.length)} carte(s) ajoutée(s), ${fmt(next.entries.length)} en attente.`,
+          'sale',
+        );
+        await context.reload?.();
+      })().catch((error: unknown) => say(`File impossible : ${explainPanelError(error)}`));
+    });
+    const selectionCount = h(
+      'span',
+      { class: 'kui-note kui-order-count' },
+      `${fmt(orders.selected.size)} carte(s) cochée(s)`,
+    );
+    refreshSelection = () => {
+      const blocked = orders.selected.size === 0 || orders.busy;
+      place.disabled = blocked;
+      enqueue.disabled = blocked;
+      selectionCount.textContent = `${fmt(orders.selected.size)} carte(s) cochée(s)`;
+    };
+    refreshSelection();
+
+    /** Envoie la file dans la limite des places libres du site (deux vrais clics). */
+    const process = guardedButton('Vider la file', 'Confirmer', () => {
+      orders.busy = true;
+      say('Envoi des ordres en attente…');
+      void processOrderQueue(context.api, {
+        // La médiane est relue avant l'envoi : un ordre préparé il y a longtemps ne paie
+        // pas un prix que le marché a depuis dépassé.
+        refreshMedian: async (id) => {
+          const snapshot = await fetchPriceSnapshot(context.api, id).catch(() => null);
+          return snapshot?.median7d ?? snapshot?.median30d ?? null;
+        },
+      })
+        .then((result) => {
+          const bilan = [
+            `File : ${fmt(result.placed)} placé(s) · ${fmt(result.total)} ◆`,
+            `${fmt(result.remaining)} encore en attente`,
+            result.failures.length ? `${fmt(result.failures.length)} refus gardé(s) en file` : '',
+            result.nextFreeHint ? `prochaine place ${result.nextFreeHint}` : '',
+            result.stop ?? '',
+          ].filter(Boolean);
+          say(bilan.join(' · '));
+          return context.reload?.();
+        })
+        .catch((error: unknown) => say(`File impossible : ${explainPanelError(error)}`))
+        .finally(() => {
+          orders.busy = false;
+        });
+    });
+
+    process.disabled = data.queue.length === 0;
+
+    const queueBox = h('div', { class: 'kui-rows kui-order-queue' });
+    const writeQueue = (next: ReturnType<typeof moveQueuedOrder>, message: string): void => {
+      void orderQueueItem
+        .setValue(next)
+        .then(() => {
+          say(message);
+          return context.reload?.();
+        })
+        .catch(() => say('Mise à jour de la file impossible.'));
+    };
+    if (!data.queue.length) {
+      queueBox.append(
+        h('p', { class: 'kui-note' }, 'File vide : coche des cartes puis « Ajouter à la file ».',
+        ),
+      );
+    }
+    const queueNow = Date.now();
+    for (const [index, entry] of data.queue.entries()) {
+      const move = (delta: number, label: string): HTMLButtonElement => {
+        const button = h(
+          'button',
+          { type: 'button', class: 'kui-secondary kui-order-move', 'aria-label': label },
+          delta < 0 ? '↑' : '↓',
+        ) as HTMLButtonElement;
+        button.disabled = delta < 0 ? index === 0 : index === data.queue.length - 1;
+        button.title = label;
+        button.addEventListener('click', () =>
+          writeQueue(
+            moveQueuedOrder({ entries: [...data.queue] }, entry.characterId, delta),
+            `${entry.name ?? `Carte #${entry.characterId}`} : position ${index + 1 + delta} dans la file.`,
+          ),
+        );
+        return button;
+      };
+      const remove = h(
+        'button',
+        { type: 'button', class: 'kui-secondary' },
+        'Retirer',
+      ) as HTMLButtonElement;
+      remove.addEventListener('click', () => {
+        void orderQueueItem
+          .setValue(removeQueuedOrders({ entries: [...data.queue] }, [entry.characterId]))
+          .then(() => context.reload?.())
+          .catch(() => say('Retrait de la file impossible.'));
+      });
+      const warnings = queueWarnings(entry, queueNow);
+      const medianNote = entry.median ? ` · médiane ${fmt(entry.median)} ◆` : '';
+      queueBox.append(
+        h(
+          'div',
+          { class: 'kui-data-row kui-order-row' },
+          cardThumb(entry.characterId),
+          h(
+            'div',
+            { class: 'kui-row-main' },
+            h('b', {}, entry.name ?? `Carte #${entry.characterId}`),
+            h(
+              'small',
+              {},
+              `×${fmt(entry.qty)} à ${fmt(entry.price)} ◆ = ${fmt(entry.price * entry.qty)} ◆${medianNote}`,
+            ),
+            // Motif du dernier refus, lisible ligne par ligne : une entrée refusée ne
+            // bloque plus les suivantes, elle attend son délai de reprise.
+            entry.error ? h('small', { class: 'kui-order-error' }, entry.error) : null,
+            warnings.length ? h('small', { class: 'kui-order-warn' }, warnings.join(' · ')) : null,
+          ),
+          h('div', { class: 'kui-order-move-group' }, move(-1, 'Monter dans la file'), move(1, 'Descendre dans la file'), remove),
+        ),
+      );
+    }
+    const sortQueue = trustedButton('Trier par marge', () => {
+      writeQueue(
+        sortQueueByMargin({ entries: [...data.queue] }),
+        'File triée par marge (médiane − prix), les cartes sans médiane à la fin.',
+      );
+    });
+    sortQueue.disabled = data.queue.length < 2;
+
+    // Dépenses du jour : ordres et achats directs partagent le même compteur et le même plafond.
+    const spendNote = h('p', { class: 'kui-note kui-order-spend' }, 'Dépenses du jour : lecture…');
+    void (async () => {
+      const [purchases, plan, history] = await Promise.all([
+        purchasesItem.getValue().catch(() => null),
+        buyPlanItem.getValue().catch(() => null),
+        buyOrdersItem.getValue().catch(() => null),
+      ]);
+      const spend = daySpend({
+        purchases: normalizePurchases(purchases),
+        orders: normalizeBuyOrders(history).entries,
+        plan: normalizeBuyPlan(plan),
+      });
+      spendNote.textContent =
+        `Dépenses du jour : ${fmt(spend.total)} ◆ ` +
+        `(${fmt(spend.orders)} ◆ ordres · ${fmt(spend.purchases)} ◆ achats` +
+        (spend.auctions ? ` · ${fmt(spend.auctions)} ◆ enchères en tête` : '') +
+        ')' +
+        (spend.limit !== null ? ` sur ${fmt(spend.limit)} ◆ engagés au plus.` : '.');
+    })();
+
+    const freeSlots = Math.max(0, data.ordersLimit - data.orders.length);
+    const queueHeading = h(
+      'h3',
+      { class: 'kui-section-title' },
+      `File d’attente de l’extension (${fmt(data.queue.length)})`,
+    );
 
     const openOrders = h('div', { class: 'kui-rows' });
-    for (const order of data.orders.slice(0, 20)) {
+    for (const order of data.orders) {
       const cancel = guardedButton('Annuler', 'Confirmer', () =>
         void context
           .perform(
@@ -2168,17 +3132,45 @@ function buyContent(data: PanelBuyData, context: ViewContext): HTMLElement {
       h(
         'p',
         { class: 'kui-note' },
-        'Cartes manquantes du catalogue : coche-en jusqu’à 20, choisis le prix par carte (ou laisse « auto »), puis place les ordres. Jamais sous le minimum de la rareté (15 ◆ dès Épique). Le chakra est bloqué tant que l’ordre est ouvert.',
+        `Cartes manquantes du catalogue : coche-en autant que tu veux, choisis le prix par carte (ou laisse « auto »), puis ajoute-les à la file. Kyara limite les ordres ouverts (${fmt(data.ordersLimit)} pour ton compte) et refuse le reste : la file de l’extension garde les autres en local et les envoie dès qu’une place se libère. Jamais sous le minimum de la rareté (15 ◆ dès Épique) ; le chakra est bloqué tant que l’ordre est ouvert.`,
       ),
-      h('div', { class: 'kui-buy-tools' }, settingsField('Rareté', rarity), openJump),
+      h(
+        'p',
+        { class: 'kui-note kui-order-limit' },
+        `${fmt(data.orders.length)} / ${fmt(data.ordersLimit)} ordre(s) ouvert(s) · ` +
+          `${fmt(freeSlots)} place(s) libre(s) · ${fmt(data.queue.length)} en file · ` +
+          `${fmt(queuedTotal({ entries: [...data.queue] }))} ◆ à engager` +
+          (data.queue.length && freeSlots === 0
+            ? ' · la file attend qu’un ordre se remplisse ou soit annulé.'
+            : ''),
+      ),
+      h(
+        'div',
+        { class: 'kui-buy-tools' },
+        settingsField('Rareté', rarity),
+        openJump,
+        selectAllOrders,
+        clearOrders,
+      ),
       h('div', { class: 'kui-field kui-order-prices' }, h('span', {}, 'Prix des ordres'), strategyBar),
       h(
         'div',
         { class: 'kui-buy-tools' },
         settingsField('Délai entre les ordres', h('span', { class: 'kui-order-delay-range' }, delayMin, h('span', {}, '–'), delayMax, h('span', {}, 's'))),
         place,
+        enqueue,
+        selectionCount,
       ),
       cardsHost,
+      queueHeading,
+      h(
+        'p',
+        { class: 'kui-note' },
+        'La file est locale et persiste : rien n’est perdu si tu fermes le panneau. « Vider la file » envoie les premiers ordres dans les places libres, après deux vrais clics ; le reste attend la prochaine place.',
+      ),
+      queueBox,
+      h('div', { class: 'kui-buy-actions' }, process, sortQueue),
+      spendNote,
       openHeading,
       data.orders.length
         ? openOrders
@@ -2219,6 +3211,8 @@ function buyContent(data: PanelBuyData, context: ViewContext): HTMLElement {
     metrics([
       ['Cartes manquantes', fmt(data.missing.length)],
       ['Ordres ouverts', fmt(data.orders.length)],
+      ['Limite du site', fmt(data.ordersLimit)],
+      ['En file', fmt(data.queue.length)],
     ]),
     segments,
     status,
@@ -2270,7 +3264,7 @@ function wishesContent(
         const name = card.name ?? `Carte #${id}`;
         const add = guardedButton('Ajouter', 'Confirmer', () =>
           context.perform(`Ajout de ${name}…`, async () => {
-            await addWish(context.api, id);
+            await gameActions.addWish(context.api, id);
             void appendActivity(`${name} ajoutée à tes envies.`, 'sale');
             return `${name} ajoutée à tes envies.`;
           }),
@@ -2298,6 +3292,18 @@ function wishesContent(
   marketLauncher.addEventListener('click', () => {
     openMarketSearchPanel(context.api);
   });
+  const clearButton = guardedButton('Vider la liste', 'Confirmer', () =>
+    context.perform('Vidage de la liste d’envies…', async () => {
+      const result = await clearWishes(context.api);
+      void appendActivity(`${fmt(result.removed)} carte(s) retirée(s) de tes envies.`, 'sale');
+      return result.stop
+        ? `${fmt(result.removed)} carte(s) retirée(s) · arrêt : ${result.stop}`
+        : `Liste d’envies vidée (${fmt(result.removed)} carte(s)).`;
+    }),
+  );
+  clearButton.disabled = data.count === 0;
+  clearButton.title = 'Retire toutes les cartes de ta liste d’envies, après deux vrais clics';
+  clearButton.classList.add('kui-wish-clear');
 
   return h(
     'div',
@@ -2329,11 +3335,11 @@ function wishesContent(
           `+ ${fmt(data.count - data.cards.length)} autre(s) carte(s) non affichée(s) dans l’aperçu.`,
         )
       : null,
-    h('div', { class: 'kui-quick-actions' }, marketLauncher),
+    h('div', { class: 'kui-quick-actions' }, marketLauncher, clearButton),
     h(
       'p',
       { class: 'kui-note' },
-      'La recherche détaillée s’ouvre dans le panneau secondaire à gauche ; la version repliée ci-dessous reste disponible sans quitter l’onglet.',
+      'La recherche détaillée s’ouvre dans le panneau secondaire à gauche ; la version repliée ci-dessous reste disponible sans quitter l’onglet. « Vider la liste » retire toutes les envies, carte par carte, après confirmation.',
     ),
     h(
       'details',
@@ -2345,6 +3351,35 @@ function wishesContent(
 }
 
 /** Lignes affichées au plus : le reste est plus cher, il n'est pas listé. */
+/** Dépense du jour, servie par les mêmes caches que la vue Achat (aucune requête). */
+async function loadDaySpend(): Promise<DaySpend> {
+  const [purchases, plan, history] = await Promise.all([
+    purchasesItem.getValue().catch(() => null),
+    buyPlanItem.getValue().catch(() => null),
+    buyOrdersItem.getValue().catch(() => null),
+  ]);
+  return daySpend({
+    purchases: normalizePurchases(purchases),
+    orders: normalizeBuyOrders(history).entries,
+    plan: normalizeBuyPlan(plan),
+  });
+}
+
+/** Ajoute un achat direct au compteur partagé (ordres + achats). */
+async function recordPurchaseEntry(entry: {
+  characterId: number;
+  name: string | null;
+  price: number;
+  kind: 'listing' | 'auction';
+  /** Enchère : une seule ligne par annonce, mise à jour à chaque mise. */
+  listingId?: string;
+  /** Enchère en tête, pas encore gagnée : compte dans le plafond, pas dans les achats. */
+  pending?: boolean;
+}): Promise<void> {
+  const purchases = normalizePurchases(await purchasesItem.getValue().catch(() => null));
+  await purchasesItem.setValue(addPurchase(purchases, entry)).catch(() => undefined);
+}
+
 const MARKET_ROWS_SHOWN = 60;
 
 /** Pause entre deux ajouts groupés : le site coupe l'accès après une rafale. */
@@ -2465,6 +3500,8 @@ function marketSearchBox(
   // Une passe ne lit que 20 envies : les plus précieuses passent en premier.
   wishRefs.splice(0, wishRefs.length, ...prioritizeWishCards(wishRefs));
   let adding = false;
+  /** Annulation de la lecture en cours, pour le bouton « Arrêter » du mode envies. */
+  let searchAbort: AbortController | null = null;
   const unnamed = data.wishIds.length - wishRefs.length;
   const rows = h('div', { class: 'kui-rows kui-market-rows' });
   const status = h('p', { class: 'kui-note kui-market-status', role: 'status' });
@@ -2510,7 +3547,7 @@ function marketSearchBox(
     const button = guardedButton('★ Ajouter', 'Confirmer', () =>
       context.perform(`Ajout de ${name} à tes envies…`, async () => {
         try {
-          await addWish(context.api, listing.characterId);
+          await gameActions.addWish(context.api, listing.characterId);
         } catch (error) {
           if (error instanceof ApiError && error.code === 'wish_owned') {
             refuseWish(listing.characterId);
@@ -2538,8 +3575,19 @@ function marketSearchBox(
     const name = listing.name ?? `Carte #${listing.characterId}`;
     const button = guardedButton(`Acheter ${fmt(price)} ◆`, 'Confirmer l’achat', () =>
       context.perform(`Achat de ${name} pour ${fmt(price)} ◆…`, async () => {
+        // Même plafond du jour que les ordres : les deux vues ne racontent plus deux comptes.
+        const refus = spendProblem(await loadDaySpend(), price);
+        if (refus) return refus;
         const outcome = await buyListing(context.api, listing.id);
         if (!outcome.ok) return `Achat refusé : ${outcome.message}`;
+        await recordPurchaseEntry({
+          characterId: listing.characterId,
+          name,
+          price: outcome.paid ?? price,
+          kind: listing.auction ? 'auction' : 'listing',
+          // Même annonce qu'une mise en attente : l'achat immédiat la remplace, sans doublon.
+          listingId: listing.id,
+        });
         blocked.add(listing.characterId);
         void rememberOwned([listing.characterId]);
         void appendActivity(`${name} achetée pour ${fmt(outcome.paid ?? price)} ◆.`, 'sale');
@@ -2558,7 +3606,7 @@ function marketSearchBox(
     const name = listing.name ?? `Carte #${listing.characterId}`;
     const button = guardedButton('Retirer', 'Confirmer', () =>
       context.perform(`Retrait de ${name} de tes envies…`, async () => {
-        await removeWish(context.api, listing.characterId);
+        await gameActions.removeWish(context.api, listing.characterId);
         wishSet.delete(listing.characterId);
         dropWishRef(listing.characterId);
         void appendActivity(`${name} retirée de tes envies.`, 'sale');
@@ -2615,7 +3663,7 @@ function marketSearchBox(
           // Une carte déjà ajoutée pendant la boucle n'est pas écrasée par un doublon.
           if (wishSet.has(listing.characterId)) continue;
           try {
-            await addWish(context.api, listing.characterId);
+            await gameActions.addWish(context.api, listing.characterId);
             wishSet.add(listing.characterId);
             pushWishRef(listing.characterId);
             added += 1;
@@ -2753,31 +3801,30 @@ function marketSearchBox(
     'Lire la suite',
   ) as HTMLButtonElement;
   more.addEventListener('click', () => void run(true));
-  // Veille de prix : les critères sont figés à l'activation, puis relus à intervalle.
-  let watch: MarketWatchConfig = normalizeMarketWatch(null);
-  let watchBusy = false;
-  const watchInput = h('input', { type: 'checkbox' }) as HTMLInputElement;
-  const watchToggle = h(
-    'label',
-    {
-      class: 'kui-market-check kui-market-watch-toggle',
-      title: 'Alerter quand une annonce correspond à ces critères',
-    },
-    watchInput,
-    h('span', {}, 'Veille prix'),
-  );
-  const watchEvery = h('select', {
-    class: 'kui-search-input kui-select kui-market-watch-every',
-    'aria-label': 'Intervalle de la veille de prix',
-  }) as HTMLSelectElement;
-  for (const minutes of MARKET_WATCH_INTERVALS_MIN) {
-    watchEvery.append(h('option', { value: String(minutes) }, `${minutes} min`));
-  }
-  const watchNow = h(
+  const stop = h(
     'button',
-    { type: 'button', class: 'kui-secondary kui-market-watch-now' },
-    'Veiller maintenant',
+    { type: 'button', class: 'kui-secondary kui-market-stop', hidden: true },
+    'Arrêter',
   ) as HTMLButtonElement;
+  stop.addEventListener('click', () => stopSearch());
+  // Veilles de prix : plusieurs veilles nommées, chacune avec ses critères figés, son
+  // intervalle et ses annonces déjà signalées. Une veille tourne aussi sans le panneau
+  // ouvert (content script, sous Web Lock) ; ici on la crée, la modifie et la déclenche.
+  let watchBook: MarketWatchBook = { watches: [] };
+  let watchBusy = false;
+  const watchName = h('input', {
+    type: 'search',
+    class: 'kui-search-input kui-market-watch-name',
+    placeholder: 'Nom de la veille (facultatif)',
+    'aria-label': 'Nom de la nouvelle veille de prix',
+    autocomplete: 'off',
+  }) as HTMLInputElement;
+  const watchCreate = h(
+    'button',
+    { type: 'button', class: 'kui-secondary kui-market-watch-create' },
+    'Créer une veille',
+  ) as HTMLButtonElement;
+  const watchList = h('div', { class: 'kui-market-watches' });
   const watchStatus = h('p', { class: 'kui-note kui-market-watch-status', role: 'status' });
 
   /** Critères retenus pour la veille : ceux saisis au moment de l'activation. */
@@ -2794,47 +3841,114 @@ function marketSearchBox(
     };
   }
 
-  function paintWatch(): void {
-    watchInput.checked = watch.enabled;
-    watchEvery.value = String(Math.round(watch.intervalMs / 60_000));
-    watchEvery.hidden = !watch.enabled;
-    watchNow.hidden = !watch.enabled;
-    watchNow.disabled = watchBusy;
-    const parts: string[] = [];
-    if (!watch.enabled) parts.push('Veille coupée.');
-    else if (watch.lastError) parts.push(`Veille en échec : ${watch.lastError}`);
-    else if (!watch.at) parts.push('Veille jamais lancée.');
-    else parts.push(`Veille ${atLabel(watch.at)} · ${fmt(watch.lastAlerts)} alerte(s).`);
-    if (watch.enabled && watch.retryAt > Date.now()) {
-      parts.push(`Pause jusqu’à ${atLabel(watch.retryAt)}.`);
-    }
-    watchStatus.textContent = parts.join(' ');
+  /** Résumé d'une veille : état, échéance et dernières alertes. */
+  function watchSummary(watch: MarketWatchConfig): string {
+    if (!watch.enabled) return 'Coupée.';
+    if (watch.lastError) return `En échec : ${watch.lastError}`;
+    if (!watch.at) return 'Jamais lancée.';
+    const parts = [`Passe ${atLabel(watch.at)} · ${fmt(watch.lastAlerts)} alerte(s).`];
+    if (watch.retryAt > Date.now()) parts.push(`Pause jusqu’à ${atLabel(watch.retryAt)}.`);
+    return parts.join(' ');
   }
 
-  async function writeWatch(patch: Partial<MarketWatchConfig>): Promise<void> {
+  async function saveBook(next: MarketWatchBook, message = ''): Promise<void> {
+    watchBook = next;
     try {
-      const stored = normalizeMarketWatch(await marketWatchItem.getValue());
-      watch = normalizeMarketWatch({ ...stored, ...patch });
-      await marketWatchItem.setValue(watch);
+      await saveWatchBook(next);
     } catch {
-      // Un stockage en échec laisse la veille telle quelle.
+      // Un stockage en échec laisse la liste affichée telle quelle.
     }
+    if (message) context.setStatus(message);
     paintWatch();
   }
 
-  async function watchOnce(): Promise<void> {
+  function paintWatch(): void {
+    watchCreate.disabled = watchBusy || watchBook.watches.length >= MARKET_WATCH_MAX;
+    watchStatus.textContent = watchBook.watches.length
+      ? `${fmt(watchBook.watches.filter((watch) => watch.enabled).length)} veille(s) active(s) sur ${fmt(watchBook.watches.length)} · ${fmt(MARKET_WATCH_MAX)} au plus.`
+      : 'Aucune veille : choisis des critères puis « Créer une veille ».';
+    watchList.replaceChildren(
+      ...watchBook.watches.map((watch) => {
+        const toggle = h('input', { type: 'checkbox' }) as HTMLInputElement;
+        toggle.checked = watch.enabled;
+        toggle.disabled = watchBusy;
+        toggle.addEventListener('change', () =>
+          void saveBook(
+            patchWatch(watchBook, watch.id, { enabled: toggle.checked }),
+            `${watch.label} : ${toggle.checked ? 'veille active' : 'veille coupée'}.`,
+          ),
+        );
+        const every = h('select', {
+          class: 'kui-search-input kui-select kui-market-watch-every',
+          'aria-label': `Intervalle de la veille ${watch.label}`,
+        }) as HTMLSelectElement;
+        for (const minutes of MARKET_WATCH_INTERVALS_MIN) {
+          every.append(h('option', { value: String(minutes) }, `${minutes} min`));
+        }
+        every.value = String(Math.round(watch.intervalMs / 60_000));
+        every.disabled = watchBusy;
+        every.addEventListener('change', () =>
+          void saveBook(
+            patchWatch(watchBook, watch.id, { intervalMs: Number(every.value) * 60_000 }),
+            `${watch.label} : toutes les ${every.value} min.`,
+          ),
+        );
+        const once = h(
+          'button',
+          { type: 'button', class: 'kui-secondary kui-market-watch-now' },
+          'Veiller maintenant',
+        ) as HTMLButtonElement;
+        once.disabled = watchBusy;
+        once.addEventListener('click', () => void watchOnce(watch.id));
+        const drop = h(
+          'button',
+          { type: 'button', class: 'kui-secondary kui-market-watch-drop' },
+          'Supprimer',
+        ) as HTMLButtonElement;
+        drop.disabled = watchBusy;
+        drop.addEventListener('click', () =>
+          void saveBook(removeWatch(watchBook, watch.id), `${watch.label} supprimée.`),
+        );
+        return h(
+          'div',
+          { class: 'kui-market-watch-row', 'data-watch': watch.id },
+          h('div', { class: 'kui-row-main' },
+            h('b', {}, watch.label),
+            h('small', {}, watchSummary(watch)),
+          ),
+          h('div', { class: 'kui-market-watch-tools' },
+            h('label', { class: 'kui-market-check' }, toggle, h('span', {}, 'Active')),
+            every,
+            once,
+            drop,
+          ),
+        );
+      }),
+    );
+  }
+
+  async function watchOnce(id: string): Promise<void> {
     if (watchBusy) return;
     watchBusy = true;
     paintWatch();
     try {
-      const result = await runMarketWatch({ api: context.api, force: true });
-      watch = normalizeMarketWatch(await marketWatchItem.getValue());
-      if (result.ok) {
-        context.setStatus(
-          `Veille : ${fmt(result.alerts)} alerte(s) sur ${fmt(result.listings)} annonce(s).`,
-        );
-      } else if (!result.skipped) {
-        context.setStatus(`Veille impossible : ${result.error ?? 'réessaie plus tard'}`);
+      const result = await runMarketWatchBook({
+        api: context.api,
+        force: true,
+        onlyId: id,
+        loadBook: async () => watchBook,
+        saveBook: async (next) => {
+          watchBook = next;
+          await saveWatchBook(next);
+        },
+      });
+      const run = result.runs[0];
+      if (run?.ok) {
+        context.setStatus(`Veille : ${fmt(run.alerts)} alerte(s) sur ${fmt(run.listings)} annonce(s).`);
+      } else if (run?.skipped === 'no-criteria') {
+        context.setStatus('Aucune envie nommée à chercher : décoche « ★ Mes envies » ou choisis des critères.');
+      } else if (run && !run.skipped) {
+        context.setStatus(`Veille impossible : ${run.error ?? 'réessaie plus tard'}`);
       }
     } finally {
       watchBusy = false;
@@ -2842,18 +3956,32 @@ function marketSearchBox(
     }
   }
 
-  watchInput.addEventListener('change', () => {
-    void writeWatch({ enabled: watchInput.checked, criteria: criteriaFromState() });
+  watchCreate.addEventListener('click', () => {
+    if (watchBook.watches.length >= MARKET_WATCH_MAX) {
+      context.setStatus(`Veille : ${fmt(MARKET_WATCH_MAX)} au plus, supprime-en une.`);
+      return;
+    }
+    const criteria = criteriaFromState();
+    const label =
+      watchName.value.trim() ||
+      (criteria.wishOnly
+        ? 'Mes envies'
+        : criteria.text
+          ? criteria.text
+          : criteria.rarity
+            ? `Rareté ${criteria.rarity}`
+            : 'Marché');
+    const watch = newWatch(criteria, label);
+    watchName.value = '';
+    void saveBook(
+      { watches: [watch, ...watchBook.watches] },
+      `Veille « ${watch.label} » créée, relancée toutes les ${Math.round(watch.intervalMs / 60_000)} min.`,
+    );
   });
-  watchEvery.addEventListener('change', () => {
-    const minutes = Math.max(5, parseInt(watchEvery.value, 10) || 10);
-    void writeWatch({ intervalMs: minutes * 60_000 });
-  });
-  watchNow.addEventListener('click', () => void watchOnce());
-  void marketWatchItem
-    .getValue()
-    .then((stored) => {
-      watch = normalizeMarketWatch(stored);
+
+  void loadWatchBook()
+    .then((book) => {
+      watchBook = book;
       paintWatch();
     })
     .catch(() => paintWatch());
@@ -3564,16 +4692,25 @@ function marketSearchBox(
   async function run(append = false): Promise<void> {
     if (state.busy) return;
     const previous = append ? state.result : null;
-    const startPage = previous ? previous.pages + 1 : 1;
+    // Une lecture neuve reprend la page mémorisée ; « Lire la suite » reprend après l'affiché.
+    const startPage = previous ? previous.pages + 1 : state.startPage;
     if (!append) state.marketShown = MARKET_ROWS_SHOWN;
     state.busy = true;
     state.error = null;
     state.progress = null;
+    state.aborted = false;
+    const controller = new AbortController();
+    searchAbort = controller;
     paint();
     try {
       const byWish = state.market.wishOnly;
       if (byWish && !wishRefs.length) {
-        throw new Error('Aucune envie nommée : relance le panneau pour recharger le catalogue.');
+        // Deux causes distinctes : wishlist vide, ou envies absentes du catalogue.
+        throw new Error(
+          data.wishIds.length
+            ? 'Tes envies n’ont pas de nom au catalogue : décoche « ★ Mes envies » pour chercher tout le marché.'
+            : 'Aucune envie à chercher : décoche « ★ Mes envies » pour chercher tout le marché.',
+        );
       }
       const next = byWish
         ? await searchMarketCards(context.api, wishRefs, {
@@ -3585,6 +4722,7 @@ function marketSearchBox(
             buyNow: state.market.buyNow,
             missing: state.market.missing,
             startPage,
+            signal: controller.signal,
             onCard: (read, total) => {
               state.progress = { read, total };
               paint();
@@ -3600,16 +4738,35 @@ function marketSearchBox(
               buyNow: state.market.buyNow,
               missing: state.market.missing,
             },
-            { ...filters(), startPage, onPage: () => paint() },
+            {
+              ...filters(),
+              startPage,
+              signal: controller.signal,
+              onPage: () => paint(),
+            },
           );
       state.result = mergeSearchResults(previous, next, filters());
+      state.aborted = next.aborted === true;
+      // La prochaine ouverture reprend la suite exacte de cette lecture.
+      void saveMarketPrefs({
+        ...state.market,
+        nextPage: Math.max(1, state.result.pages + 1),
+        pages: state.result.pages,
+      });
     } catch (error) {
       state.error = explainPanelError(error);
       state.result = null;
     } finally {
+      if (searchAbort === controller) searchAbort = null;
       state.busy = false;
       paint();
     }
+  }
+
+  /** Bouton « Arrêter » : la lecture en cours s'interrompt entre deux pages. */
+  function stopSearch(): void {
+    searchAbort?.abort();
+    context.setStatus('Arrêt demandé : la lecture se termine à la page en cours.');
   }
 
   /** État de la ligne, pour savoir si elle doit être reconstruite. */
@@ -3726,6 +4883,9 @@ function marketSearchBox(
     const frozen = state.busy || adding;
     submit.disabled = frozen;
     submit.textContent = state.busy && !state.result ? 'Lecture…' : 'Chercher';
+    // Une lecture envie par envie dure des dizaines de secondes : elle doit pouvoir s'arrêter.
+    stop.hidden = !(state.busy && state.market.wishOnly);
+    stop.disabled = !state.busy;
     more.disabled = frozen;
     more.hidden = !state.result || state.result.complete;
     moreRows.disabled = frozen;
@@ -3764,20 +4924,22 @@ function marketSearchBox(
     if (state.error) status.textContent = state.error;
     else if (state.busy) {
       status.textContent = state.progress
-        ? `Lecture des envies ${fmt(state.progress.read)}/${fmt(state.progress.total)}…`
+        ? `Lecture des envies ${fmt(state.progress.read)}/${fmt(state.progress.total)}… · Arrêter pour interrompre`
         : 'Lecture du marché, page par page…';
-    } else if (!result) status.textContent = 'Aucune recherche lancée.';
+    } else if (!result) {
+      status.textContent = `${state.opening ? `${state.opening} ` : ''}Aucune recherche lancée.`;
+    }
     else if (cards) {
       const echecs = cards.failures ? ` · ${fmt(cards.failures)} en échec` : '';
       const surplus = cards.saturated.length
         ? ` · plus de ${fmt(WISH_CARD_MAX_LISTINGS)} annonces : ${cards.saturated.slice(0, 3).join(', ')}${cards.saturated.length > 3 ? ` +${fmt(cards.saturated.length - 3)}` : ''}`
         : '';
       status.textContent = cards.total
-        ? `${fmt(result.listings.length)} annonce(s)${tronque} · ${fmt(cards.read)}/${fmt(cards.total)} envie(s) lue(s)${echecs}${surplus}${suffixe}${result.complete ? '' : ' · lecture partielle'}`
+        ? `${fmt(result.listings.length)} annonce(s)${tronque} · ${fmt(cards.read)}/${fmt(cards.total)} envie(s) lue(s)${echecs}${surplus}${suffixe}${result.complete ? '' : ' · lecture partielle'}${result.aborted ? ' · arrêtée' : ''}`
         : 'Aucune envie ne correspond au nom, à l’univers ou à la rareté saisis.';
     } else {
       const couverture = result.total ? ` sur ${fmt(result.total)}` : '';
-      status.textContent = `${fmt(result.listings.length)} annonce(s)${tronque}${couverture} · ${fmt(result.pages)} page(s) lue(s)${suffixe}${result.complete ? '' : ' · lecture partielle'}`;
+      status.textContent = `${fmt(result.listings.length)} annonce(s)${tronque}${couverture} · ${fmt(result.pages)} page(s) lue(s)${suffixe}${result.complete ? '' : ' · lecture partielle'}${result.aborted ? ' · arrêtée' : ''}`;
     }
   }
 
@@ -3797,10 +4959,12 @@ function marketSearchBox(
       buyNowOnly,
       hideOwnedBox,
       submit,
+      stop,
       more,
       addAllButton,
     ),
-    h('div', { class: 'kui-market-watch' }, watchToggle, watchEvery, watchNow),
+    h('div', { class: 'kui-market-watch' }, watchName, watchCreate),
+    watchList,
     watchStatus,
     opportunityStatus,
     h('div', { class: 'kui-wishes-export-row' }, exportButton),
@@ -4089,6 +5253,11 @@ function packsContent(data: PanelPacksData, context: ViewContext): HTMLElement {
       context.perform(`Ouverture de ${item.pack.name}…`, async () => {
         const result = await openPack(context.api, item.pack);
         if (!result.ok) throw new Error(result.message);
+        void appendPackHistory({
+          packId: item.pack.id,
+          packName: item.pack.name,
+          cards: result.cards,
+        });
         void appendActivity(`${item.pack.name} ouvert : ${result.message}`, 'sale');
         return result.message;
       }),
@@ -4267,7 +5436,7 @@ function albumsContent(data: PanelAlbumsData, context: ViewContext): HTMLElement
       let added = 0;
       for (const card of cards) {
         try {
-          await addWish(context.api, card.id);
+          await gameActions.addWish(context.api, card.id);
           wished.add(card.id);
           added += 1;
         } catch {
@@ -4571,6 +5740,157 @@ function statsAccountRow(account: Account, stats: StatData, context: ViewContext
     );
   }
   return h('div', { class: 'kui-stats-item' }, rowButton, details);
+}
+
+/** Titres des groupes de cartes, dans l'ordre de `rarityRank` (inconnue en dernier). */
+const PACK_RARITY_GROUPS = [
+  'Mythiques',
+  'Légendaires',
+  'Épiques',
+  'Rares',
+  'Peu communes',
+  'Communes',
+  'Rareté inconnue',
+] as const;
+
+/** Visuelle de carte : l'id du site, sinon l'image donnée par le catalogue. */
+function packCardImage(card: PanelPackHistoryCard): HTMLElement | null {
+  const src =
+    imageUrl(card.image) ?? (card.id ? imageUrl(`/cards/sm/${card.id}.webp`) : null);
+  return src
+    ? h('img', { class: 'kui-thumb', src, alt: '', width: '32', height: '48', loading: 'lazy' })
+    : null;
+}
+
+function packCardRow(card: PanelPackHistoryCard): HTMLElement {
+  const detail = [`${fmt(card.count)} fois`, card.packName]
+    .filter(Boolean)
+    .concat(shortDate(new Date(card.lastAt).toISOString()))
+    .join(' · ');
+  return h(
+    'div',
+    { class: 'kui-data-row' },
+    packCardImage(card),
+    h('div', { class: 'kui-row-main' }, h('b', {}, card.name), h('small', {}, detail)),
+  );
+}
+
+/**
+ * Boosters ouverts et cartes obtenues : journal récent des ouvertures, puis toutes les cartes
+ * regroupées par rareté (mythique d'abord), de la plus récente à la plus ancienne dans chaque
+ * groupe, avec leur visuelle.
+ */
+function packHistoryContent(data: PanelPackHistoryData): HTMLElement {
+  const entries = [...data.entries].sort((a, b) => a.at - b.at);
+  const last = entries.at(-1) ?? null;
+
+  const journal = [...entries]
+    .reverse()
+    .slice(0, 20)
+    .map((entry: PackHistoryEntry) =>
+      h(
+        'li',
+        { class: 'kui-activity-entry is-sale' },
+        h('small', {}, shortDate(new Date(entry.at).toISOString())),
+        h(
+          'span',
+          {},
+          `${entry.packName} · ${entry.cards.length} carte(s)` +
+            (entry.cards.length
+              ? ` : ${entry.cards.map((card: PackHistoryCard) => card.name).join(', ')}`
+              : ''),
+        ),
+      ),
+    );
+
+  const groups = new Map<number, PanelPackHistoryCard[]>();
+  for (const card of data.cards) {
+    const rank = Math.min(rarityRank(card.rarity), PACK_RARITY_GROUPS.length - 1);
+    const group = groups.get(rank);
+    if (group) group.push(card);
+    else groups.set(rank, [card]);
+  }
+  const sections = [...groups.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([rank, group]) => {
+      const copies = group.reduce((count, card) => count + card.count, 0);
+      return h(
+        'section',
+        { class: 'kui-pack-rarity' },
+        h(
+          'h3',
+          { class: 'kui-section-title' },
+          `${PACK_RARITY_GROUPS[rank] ?? 'Rareté inconnue'} · ` +
+            `${fmt(group.length)} carte(s) · ${fmt(copies)} exemplaire(s)`,
+        ),
+        list(group.map(packCardRow)),
+      );
+    });
+
+  return h(
+    'div',
+    {},
+    metrics([
+      ['Ouvertures', fmt(data.totals.opened)],
+      ['Cartes obtenues', fmt(data.totals.cards)],
+      [
+        'Dernière ouverture',
+        last ? shortDate(new Date(last.at).toISOString()) : '—',
+      ],
+    ]),
+    h('h3', { class: 'kui-section-title' }, 'Journal récent des ouvertures'),
+    journal.length
+      ? h('ul', { class: 'kui-activity-log' }, ...journal)
+      : h(
+          'p',
+          { class: 'kui-note' },
+          'Aucun booster ouvert pour le moment : ouvre-en un dans Stats → Boosters ou active l’ouverture automatique.',
+        ),
+    h('h3', { class: 'kui-section-title' }, 'Cartes obtenues, par rareté'),
+    sections.length
+      ? h('div', { class: 'kui-pack-rarities' }, ...sections)
+      : h('p', { class: 'kui-note' }, 'Les cartes tirées apparaîtront ici après la première ouverture.'),
+  );
+}
+
+/**
+ * Écritures de jeu : chaque envoi qui modifie quelque chose chez Kyara, avec son
+ * résultat. Le journal est local, donc la vue ne relit rien sur le réseau ; elle
+ * s'actualise quand une écriture arrive.
+ */
+function writeLogContent(data: PanelWriteLogData): HTMLElement {
+  const summary = data.summary;
+  const entries = [...data.entries].reverse().slice(0, 60);
+  const rows = entries.map((entry: WriteLogEntry) =>
+    h(
+      'li',
+      { class: `kui-activity-entry is-${entry.ok ? 'sale' : 'warn'}` },
+      h('small', {}, shortDate(new Date(entry.at).toISOString())),
+      h('span', {}, writeLogLine(entry)),
+    ),
+  );
+
+  return h(
+    'div',
+    {},
+    metrics([
+      ['Écritures', fmt(summary.total)],
+      ['Aujourd’hui', fmt(summary.today)],
+      ['Refus', fmt(summary.failed)],
+      [
+        'Dernière',
+        summary.lastAt ? shortDate(new Date(summary.lastAt).toISOString()) : '—',
+      ],
+    ]),
+    h('h3', { class: 'kui-section-title' }, 'Dernières écritures'),
+    rows.length
+      ? h('ul', { class: 'kui-activity-log' }, ...rows)
+      : h(
+          'p',
+          { class: 'kui-note' },
+          'Aucune écriture de jeu enregistrée : une vente, un achat, un recyclage, un échange ou une envie apparaîtra ici, avec son résultat.',
+        ),
+  );
 }
 
 function activityContent(data: PanelActivityData, context: ViewContext): HTMLElement {
@@ -4908,7 +6228,24 @@ function newWishSearchState(): WishSearchState {
     progress: null,
     marketShown: MARKET_ROWS_SHOWN,
     owned: new Set<number>(),
+    startPage: 1,
+    opening: '',
+    aborted: false,
   };
+}
+
+/** Applique les préférences mémorisées à l'état de recherche du panneau. */
+function applyMarketPrefs(state: WishSearchState, prefs: MarketSearchPrefs): void {
+  state.market.text = prefs.text;
+  state.market.series = prefs.series;
+  state.market.rarity = prefs.rarity;
+  state.market.sort = prefs.sort;
+  state.market.noAuction = prefs.noAuction;
+  state.market.missing = prefs.missing;
+  state.market.buyNow = prefs.buyNow;
+  state.market.minDiscount = prefs.minDiscount;
+  state.market.hideOwned = prefs.hideOwned;
+  state.market.wishOnly = prefs.wishOnly;
 }
 
 /**
@@ -4986,9 +6323,18 @@ export function openMarketSearchPanel(api: PanelApi): void {
   const state = newWishSearchState();
   state.market.wishOnly = true;
   void loadWishPanel(api)
-    .then((data) => {
+    .then(async (data) => {
+      const prefs = await loadMarketPrefs().catch(() => EMPTY_MARKET_PREFS);
+      applyMarketPrefs(state, prefs);
+      // Sans envie enregistrée, « ★ Mes envies » ne trouverait rien à chercher.
+      if (!data.wishIds.length) state.market.wishOnly = false;
+      state.startPage = resumePage(prefs);
+      state.opening =
+        `${fmt(data.wishIds.length)} envie(s) · ${fmt(data.catalogSize)} carte(s) au catalogue` +
+        (state.startPage > 1 ? ` · reprise page ${fmt(state.startPage)}` : '') +
+        '.';
       body.replaceChildren(marketSearchBox(data, context, state));
-      status.textContent = `${fmt(data.wishIds.length)} envie(s) · ${fmt(data.catalogSize)} carte(s) au catalogue.`;
+      status.textContent = state.opening;
     })
     .catch((error: unknown) => {
       status.textContent = `Lecture impossible : ${explainPanelError(error)}`;
@@ -5079,7 +6425,268 @@ function groupView(options: {
   };
 }
 
-/** Les cinq vues interactives, branchées sur les mêmes modules que les pages complètes. */
+const AUTOMATION_STATE: Record<string, string> = {
+  running: 'En cours',
+  waiting: 'En attente',
+  paused: 'En pause',
+  stopped: 'Arrêtée',
+};
+
+/**
+ * Réglages des automatisations, déplacés du popup de la barre d'outils : les contrôles
+ * écrivent les mêmes stockages, donc le service de fond et la page Doublons les voient
+ * aussitôt. Aucun réglage n'écrit sur Kyara.
+ */
+function settingsContent(data: PanelSettingsData, context: ViewContext): HTMLElement {
+  const notice = h('p', { class: 'kui-note kui-settings-state', role: 'status' });
+  const save = (label: string, task: () => Promise<void>): void => {
+    void context
+      .saveSettings(label, async () => {
+        await task();
+        return 'Réglages enregistrés.';
+      })
+      .then(() => {
+        notice.textContent = '';
+      });
+  };
+
+  const toggle = (
+    key: 'autoOpen' | 'antiAfk' | 'autoSell' | 'orderQueueAuto' | 'autoOpenAllowChakra',
+    label: string,
+    hint: string,
+  ): HTMLElement => {
+    const input = h('input', { type: 'checkbox' }) as HTMLInputElement;
+    input.checked = data.settings[key];
+    input.addEventListener('change', () => {
+      const value = input.checked;
+      data.settings[key] = value;
+      save('Enregistrement…', () => setSetting(key, value).then(() => undefined));
+    });
+    return h(
+      'label',
+      { class: 'kui-check' },
+      input,
+      h('span', {}, h('b', {}, label), h('small', {}, hint)),
+    );
+  };
+
+  const packsHost = h('div', { class: 'kui-fields' });
+  if (!data.packs.length) {
+    packsHost.append(
+      h(
+        'p',
+        { class: 'kui-note' },
+        'Aucun booster en cache : ouvre la page des boosters puis clique sur Actualiser.',
+      ),
+    );
+  } else {
+    for (const pack of data.packs) {
+      const input = h('input', { type: 'checkbox' }) as HTMLInputElement;
+      input.checked = data.settings.autoOpenPackIds.includes(pack.id);
+      input.addEventListener('change', () => {
+        const ids = new Set(data.settings.autoOpenPackIds);
+        if (input.checked) ids.add(pack.id);
+        else ids.delete(pack.id);
+        data.settings.autoOpenPackIds = [...ids];
+        save('Enregistrement des boosters…', () =>
+          setSetting('autoOpenPackIds', [...ids]).then(() => undefined),
+        );
+      });
+      packsHost.append(h('label', { class: 'kui-check' }, input, h('span', {}, pack.name)));
+    }
+  }
+
+  let budget: BudgetSettings = { ...data.budget };
+  const budgetLine = h('p', { class: 'kui-note' }, data.budgetLabelText);
+  const saveBudget = (patch: Partial<BudgetSettings>): void => {
+    budget = normalizeBudget({ ...budget, ...patch });
+    save('Enregistrement du budget…', () =>
+      budgetSettingsItem.setValue(budget).then(() => undefined),
+    );
+  };
+
+  const stamp = (at: number | null | undefined): string => (at ? atLabel(at) : '—');
+
+  // Coupe-circuit : un seul interrupteur arrête toutes les boucles, et un déclenchement
+  // automatique ne se lève qu'avec un réarmement explicite.
+  const breaker = h('input', { type: 'checkbox' }) as HTMLInputElement;
+  breaker.checked = data.settings.killSwitch;
+  const breakerState = h('p', { class: 'kui-note kui-circuit-state', role: 'status' });
+  const rearm = h(
+    'button',
+    { type: 'button', class: 'kui-secondary' },
+    'Réarmer les automatisations',
+  );
+  const paintBreaker = (): void => {
+    const state = data.circuit ?? normalizeCircuit(null);
+    if (!data.settings.killSwitch) {
+      breakerState.textContent = 'Automatisations autorisées.';
+    } else if (state.tripped) {
+      breakerState.textContent =
+        `Déclenché automatiquement ${stamp(state.at)} après ${fmt(state.failures)} échec(s) ` +
+        `(${state.source ?? 'boucle'}) : ${state.reason || 'erreur inconnue'}. ` +
+        'Réarme à la main pour repartir.';
+    } else {
+      breakerState.textContent =
+        'Arrêt manuel : vente auto, Auto-Open, reprix, veille et file d’ordres sont coupés.';
+    }
+    rearm.style.display = state.tripped && data.settings.killSwitch ? '' : 'none';
+  };
+  const setBreaker = (stop: boolean): void => {
+    data.settings.killSwitch = stop;
+    breaker.checked = stop;
+    void context
+      .saveSettings(stop ? 'Arrêt des automatisations…' : 'Réarmement…', async () => {
+        if (stop) await setSetting('killSwitch', true);
+        else await resetCircuit();
+        if (!stop) data.circuit = normalizeCircuit(null);
+        return stop ? 'Coupe-circuit activé.' : 'Automatisations réarmées.';
+      })
+      .then(paintBreaker);
+  };
+  breaker.addEventListener('change', () => setBreaker(breaker.checked));
+  rearm.addEventListener('click', () => setBreaker(false));
+  paintBreaker();
+
+  const logBox = (entries: readonly { t: number; m: string }[]): HTMLElement =>
+    entries.length
+      ? h(
+          'ul',
+          { class: 'kui-activity-log' },
+          ...entries.map((entry) => h('li', {}, `${stamp(entry.t)} · ${entry.m}`)),
+        )
+      : h('p', { class: 'kui-note' }, 'Aucun passage enregistré.');
+
+  const refresh = trustedButton('Actualiser', () => {
+    context.setStatus('Relecture des réglages et des boosters…');
+    void (async () => {
+      try {
+        // Même relecture que l'ancien popup : le catalogue vient de Kyara, puis
+        // la vue relit les réglages locaux.
+        const raw = await context.api.request<unknown>('/api/packs', { timeoutMs: 25_000 });
+        await packCatalogItem.setValue(normalizeAutoOpenPacks(raw));
+      } catch {
+        // Sans réponse, le catalogue en cache reste affiché.
+      }
+      await context.reload?.();
+    })();
+  });
+
+  return h(
+    'div',
+    {},
+    h('h3', { class: 'kui-section-title' }, 'Coupe-circuit'),
+    h(
+      'div',
+      { class: 'kui-fields' },
+      h(
+        'label',
+        { class: 'kui-check' },
+        breaker,
+        h(
+          'span',
+          {},
+          h('b', {}, 'Arrêter toutes les automatisations'),
+          h(
+            'small',
+            {},
+            'Vente auto, Auto-Open, reprix, veille de prix et file d’ordres. Se réarme à la main.',
+          ),
+        ),
+      ),
+      rearm,
+    ),
+    breakerState,
+    h('h3', { class: 'kui-section-title' }, 'Automatisations'),
+    h(
+      'div',
+      { class: 'kui-fields' },
+      toggle(
+        'autoOpen',
+        'Ouverture automatique de boosters',
+        'Pause si le site demande une vérification.',
+      ),
+      toggle('antiAfk', 'Anti-AFK', 'Répond à la boîte « Tu es toujours là ? ».'),
+      toggle('autoSell', 'Vente automatique des doublons', 'Selon les réglages de l’onglet Vente.'),
+      toggle(
+        'orderQueueAuto',
+        'Vider la file d’ordres d’achat',
+        'Place les ordres en attente dès qu’une place se libère (limite d’ordres ouverts du site).',
+      ),
+      toggle(
+        'autoOpenAllowChakra',
+        'Dépenser du chakra pendant l’ouverture automatique',
+        'Sinon, seuls les boosters offerts et les dons sont ouverts.',
+      ),
+    ),
+    h('h3', { class: 'kui-section-title' }, 'Rythme et budget partagé'),
+    h(
+      'div',
+      { class: 'kui-fields' },
+      settingsField(
+        'Attente sans booster (s)',
+        settingsNumber(data.settings.autoOpenIdleSec, 5, 300, (value) =>
+          save('Enregistrement…', () => setSetting('autoOpenIdleSec', value).then(() => undefined)),
+        ),
+      ),
+      settingsField(
+        'Requêtes automatiques / minute',
+        settingsNumber(budget.perMinute, 5, 120, (value) => saveBudget({ perMinute: value })),
+      ),
+      settingsField(
+        'Écart minimal (ms)',
+        settingsNumber(budget.minGapMs, 200, 5_000, (value) => saveBudget({ minGapMs: value })),
+      ),
+    ),
+    budgetLine,
+    h('h3', { class: 'kui-section-title' }, 'Boosters à ouvrir'),
+    packsHost,
+    h('h3', { class: 'kui-section-title' }, 'Ouverture automatique'),
+    h(
+      'p',
+      { class: 'kui-note' },
+      data.autoOpen.status
+        ? `${AUTOMATION_STATE[data.autoOpen.status.state] ?? 'Active'} · ${data.autoOpen.status.message}` +
+          ` · ${fmt(data.autoOpen.status.opened)} ouvert(s), ${fmt(data.autoOpen.status.cards)} carte(s)` +
+          ` · prochain ${stamp(data.autoOpen.status.nextAt)}`
+        : 'Aucune activité.',
+    ),
+    logBox(data.autoOpen.log),
+    h('h3', { class: 'kui-section-title' }, 'Vente automatique'),
+    h(
+      'p',
+      { class: 'kui-note' },
+      !data.settings.autoSell
+        ? 'Désactivée : active-la ci-dessus.'
+        : data.autoSell.status
+          ? `${AUTOMATION_STATE[data.autoSell.status.state] ?? 'Active'} · ${data.autoSell.status.message}` +
+            ` · ${fmt(data.autoSell.status.placed)} annonce(s) créée(s)` +
+            ` · prochain ${stamp(data.autoSell.status.nextAt)}`
+          : 'En attente du premier passage (onglet kyara.games ouvert).',
+    ),
+    logBox(data.autoSell.log),
+    h(
+      'p',
+      { class: 'kui-note' },
+      `Version ${data.version} · ${updateLabel(data.update)} · réglages locaux, partagés avec la page Doublons et le service de fond.`,
+    ),
+    h(
+      'div',
+      { class: 'kui-quick-actions' },
+      ...data.links.map((link) =>
+        h(
+          'a',
+          { class: 'kui-secondary', href: link.href, target: '_blank', rel: 'noreferrer' },
+          link.label,
+        ),
+      ),
+      refresh,
+    ),
+    notice,
+  );
+}
+
+/** Les vues interactives, branchées sur les mêmes modules que les pages complètes. */
 export function createPanelViews({ api }: PanelViewOptions): PanelView[] {
   const wishSearch = newWishSearchState();
   const statsSearch: StatsSearchState = { query: '', results: null };
@@ -5178,6 +6785,34 @@ export function createPanelViews({ api }: PanelViewOptions): PanelView[] {
       render: packsContent,
     }),
     asyncView({
+      id: 'packHistory',
+      label: 'Boosters ouverts',
+      eyebrow: 'Historique local',
+      title: 'Tes boosters ouverts',
+      lead: 'Journal des ouvertures et cartes obtenues, regroupées par rareté et de la plus récente à la plus ancienne dans chaque groupe.',
+      api,
+      load: () => loadPackHistoryPanel(api),
+      render: packHistoryContent,
+      watch: (_data, refresh) => {
+        const stop = packHistoryItem.watch(() => void refresh());
+        return () => stop();
+      },
+    }),
+    asyncView({
+      id: 'writes',
+      label: 'Écritures',
+      eyebrow: 'Journal local',
+      title: 'Tes écritures de jeu',
+      lead: 'Chaque envoi vers Kyara — vente, achat, mise, recyclage, échange, envie, booster — avec son résultat.',
+      api,
+      load: () => loadWriteLogPanel(),
+      render: writeLogContent,
+      watch: (_data, refresh) => {
+        const stop = writeLogItem.watch(() => void refresh());
+        return () => stop();
+      },
+    }),
+    asyncView({
       id: 'activity',
       label: 'Activité',
       eyebrow: 'Ventes et journal',
@@ -5206,6 +6841,16 @@ export function createPanelViews({ api }: PanelViewOptions): PanelView[] {
       load: () => loadStatsPanel(),
       render: (data, context) => statsContent(data, context, statsSearch),
     }),
+    asyncView({
+      id: 'settings',
+      label: 'Réglages',
+      eyebrow: 'Extension',
+      title: 'Automatisations et options',
+      lead: 'Ouverture des boosters, anti-AFK, vente automatique et budget partagé, réglés ici sans quitter Kyara.',
+      api,
+      load: () => loadSettingsPanel(),
+      render: settingsContent,
+    }),
   ];
 
   const find = (id: string): PanelView => {
@@ -5224,7 +6869,12 @@ export function createPanelViews({ api }: PanelViewOptions): PanelView[] {
     groupView({
       id: 'activity',
       label: 'Activité',
-      tabs: [renamed('activity', 'Ventes et journal'), renamed('dashboard', 'Aujourd’hui')],
+      tabs: [
+        renamed('activity', 'Ventes et journal'),
+        renamed('dashboard', 'Aujourd’hui'),
+        renamed('packHistory', 'Boosters ouverts'),
+        renamed('writes', 'Écritures'),
+      ],
     }),
     groupView({
       id: 'stats',
@@ -5236,5 +6886,6 @@ export function createPanelViews({ api }: PanelViewOptions): PanelView[] {
         renamed('packs', 'Boosters'),
       ],
     }),
+    find('settings'),
   ];
 }

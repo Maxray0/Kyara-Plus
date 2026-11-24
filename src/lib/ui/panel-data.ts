@@ -1,6 +1,12 @@
 import { AuthError, PassRequiredError, type ApiClient } from '../api';
+import { readCircuit, type CircuitState } from '../circuit-breaker';
 import { notifyExpiringListings } from '../alerts/portfolio';
 import { buyOrdersItem } from '../doublons/buy-orders';
+import {
+  orderQueueItem,
+  readOrderLimit,
+  type QueuedOrder,
+} from '../doublons/order-queue';
 import { getSales } from '../doublons/sales';
 import {
   dailyRecapAlert,
@@ -30,6 +36,7 @@ import {
 } from '../doublons/albums';
 import { getCatalog } from '../catalog';
 import { buildCandidates, type Candidate } from '../doublons/candidates';
+import { listedCounts } from '../doublons/sell';
 import {
 } from '../doublons/advisor';
 import { getMarket, sellPricesItem, type Listing } from '../doublons/market';
@@ -59,6 +66,30 @@ import {
   type PackAdvice,
 } from '../doublons/packs';
 import { loadWishlist } from '../doublons/wishlist';
+import { autoSellLogItem, autoSellStatusItem, type AutoSellStatus } from '../doublons/auto-sell';
+import {
+  getPackHistory,
+  getPackHistoryTotals,
+  rarityRank,
+  type PackHistoryEntry,
+} from '../auto-open/history';
+import { getWriteLog, writeLogSummary, type WriteLogEntry, type WriteLogSummary } from '../write-log';
+import { autoOpenLogItem, autoOpenStatusItem, packCatalogItem } from '../auto-open/storage';
+import type { AutoOpenStatus } from '../auto-open/runner';
+import {
+  loadUpdateCheck,
+  storeLinks,
+  type StoreLink,
+  type UpdateCheck,
+} from '../update-check';
+import {
+  budgetLabel,
+  budgetSettingsItem,
+  budgetStatsItem,
+  normalizeBudget,
+  type BudgetSettings,
+} from '../automation/budget';
+import { getSettings, type Settings } from '../settings';
 import {
   getActivity,
   loadActivitySnapshot,
@@ -105,19 +136,30 @@ export interface PanelSaleData {
   /** Annonces en cours, pour les ajuster ou les annuler sans quitter la page. */
   listings: readonly Listing[];
   settings: SellSettings;
+  /** Vente automatique : état partagé et derniers messages, sans relire Kyara. */
+  autoSell: {
+    enabled: boolean;
+    status: AutoSellStatus | null;
+    log: readonly { t: number; m: string }[];
+  };
 }
 
 /** Collection + annonces + prix mémorisés : aucun prix n'est inventé dans le panneau. */
 export async function loadSalePanel(api: PanelApi): Promise<PanelSaleData> {
-  const [settings, catalog, market, stored] = await Promise.all([
-    getSellSettings(),
-    getCatalog(api),
-    getMarket(api),
-    sellPricesItem.getValue(),
-  ]);
+  const [settings, catalog, market, stored, appSettings, autoSellStatus, autoSellLog] =
+    await Promise.all([
+      getSellSettings(),
+      getCatalog(api),
+      getMarket(api),
+      sellPricesItem.getValue(),
+      getSettings(),
+      autoSellStatusItem.getValue(),
+      autoSellLogItem.getValue(),
+    ]);
   const meta = catalogMeta(catalog);
   const candidates = await buildCandidates(api, settings, {
     activeIds: new Set(market.active.map((listing) => listing.characterId)),
+    listed: listedCounts(market.active),
     holds: market.holds,
     meta,
     prices: new Map(Object.entries(stored).map(([id, value]) => [Number(id), value] as const)),
@@ -138,6 +180,11 @@ export async function loadSalePanel(api: PanelApi): Promise<PanelSaleData> {
     allCandidates: candidates,
     listings: market.active,
     settings,
+    autoSell: {
+      enabled: appSettings.autoSell,
+      status: autoSellStatus,
+      log: autoSellLog.slice(-5).reverse(),
+    },
   };
 }
 
@@ -442,16 +489,22 @@ export interface PanelBuyData {
   missing: readonly BuyCard[];
   /** Ordres d'achat ouverts, relus sur Kyara. */
   orders: readonly MyOrder[];
+  /** Limite d'ordres ouverts du compte (`marketLimits.buyOrders`). */
+  ordersLimit: number;
+  /** File locale d'ordres, au-delà des places libres du site. */
+  queue: readonly QueuedOrder[];
   /** Cartes déjà possédées, pour ne pas les racheter. */
   ownedIds: ReadonlySet<number>;
 }
 
 /** Achat : cartes manquantes et ordres ouverts ; les annonces sont lues à la demande. */
 export async function loadBuyPanel(api: PanelApi): Promise<PanelBuyData> {
-  const [catalog, collection, orders] = await Promise.all([
+  const [catalog, collection, orders, ordersLimit, queue] = await Promise.all([
     getCatalog(api),
     fetchOwned(api),
     fetchMyOrders(api).catch((): MyOrder[] => []),
+    readOrderLimit(api),
+    orderQueueItem.getValue().catch(() => null),
   ]);
   const missing: BuyCard[] = [];
   const seen = new Set<number>();
@@ -473,6 +526,8 @@ export async function loadBuyPanel(api: PanelApi): Promise<PanelBuyData> {
   return {
     missing,
     orders,
+    ordersLimit,
+    queue: queue?.entries ?? [],
     ownedIds: new Set(
       [...collection.owned.entries()]
         .filter(([, qty]) => qty > 0)
@@ -630,4 +685,128 @@ export async function loadPacksPanel(api: PanelApi): Promise<PanelPacksData> {
     (row) => row.missing > 0,
   );
   return { rows, packs: packs.length, poolsRead: pools.size, failed };
+}
+
+export interface PanelSettingsData {
+  settings: Settings;
+  /** Cause du dernier déclenchement automatique du coupe-circuit. */
+  circuit: CircuitState;
+  /** Boosters proposés à l'ouverture automatique, sans les dons seuls. */
+  packs: readonly { id: string; name: string }[];
+  budget: BudgetSettings;
+  budgetLabelText: string;
+  autoOpen: { status: AutoOpenStatus | null; log: readonly { t: number; m: string }[] };
+  autoSell: {
+    status: AutoSellStatus | null;
+    log: readonly { t: number; m: string; k: string }[];
+  };
+  version: string;
+  update: UpdateCheck;
+  links: readonly StoreLink[];
+}
+
+/**
+ * Réglages des automatisations, repris du popup de la barre d'outils : tout vient du
+ * stockage local (options, budget, journaux), sans requête à Kyara.
+ */
+export async function loadSettingsPanel(): Promise<PanelSettingsData> {
+  const [settings, circuit, packs, budgetRaw, budgetStats, openStatus, openLog, sellStatus, sellLog] =
+    await Promise.all([
+      getSettings(),
+      readCircuit(),
+      packCatalogItem.getValue(),
+      budgetSettingsItem.getValue(),
+      budgetStatsItem.getValue(),
+      autoOpenStatusItem.getValue(),
+      autoOpenLogItem.getValue(),
+      autoSellStatusItem.getValue(),
+      autoSellLogItem.getValue(),
+    ]);
+  const runtime = browser.runtime as unknown as {
+    requestUpdateCheck?: () => Promise<{ status?: string; details?: { version?: string } }>;
+  };
+  return {
+    settings,
+    circuit,
+    packs: packs
+      .filter((pack) => !pack.grantOnly)
+      .map((pack) => ({ id: pack.id, name: pack.name })),
+    budget: normalizeBudget(budgetRaw),
+    budgetLabelText: budgetLabel(budgetStats),
+    autoOpen: { status: openStatus, log: openLog.slice(-5).reverse() },
+    autoSell: { status: sellStatus, log: sellLog.slice(-5).reverse() },
+    version: browser.runtime.getManifest().version,
+    update: await loadUpdateCheck(runtime),
+    links: storeLinks(),
+  };
+}
+
+export interface PanelPackHistoryData {
+  /** Ouvertures, de la plus ancienne à la plus récente. */
+  entries: readonly PackHistoryEntry[];
+  /** Cumul à vie : le journal est plafonné, ces compteurs ne le sont pas. */
+  totals: { opened: number; cards: number };
+  /** Toutes les cartes obtenues, cumulées depuis la première ouverture. */
+  cards: readonly PanelPackHistoryCard[];
+}
+
+export interface PanelPackHistoryCard {
+  name: string;
+  rarity: string | null;
+  id: number | null;
+  count: number;
+  lastAt: number;
+  packName: string;
+  /** Visuelle du site : l'id de la carte suffit, sinon le catalogue donne l'image. */
+  image: string | null;
+}
+
+/**
+ * Historique des boosters ouverts : le journal conservé, les totaux à vie et le cumul par
+ * carte. Le catalogue est relu (ou rafraîchi au-delà de 24 h) car les cartes obtenues avant
+ * l'ajout des ids n'ont que leur nom pour retrouver leur visuelle.
+ */
+export async function loadPackHistoryPanel(api: PanelApi): Promise<PanelPackHistoryData> {
+  const [entries, totals, catalog] = await Promise.all([
+    getPackHistory(),
+    getPackHistoryTotals(),
+    // getCatalog relit le catalogue au-delà de 24 h et retourne son cache en cas d'échec :
+    // c'est lui qui fournit l'id des cartes obtenues avant l'ajout des ids.
+    getCatalog(api).catch((): CatalogCard[] => []),
+  ]);
+  const images = new Map<string, string>();
+  for (const card of catalog) {
+    if (!card.name) continue;
+    // Comme le reste du panneau : la visuelle du site vient de l'id, jamais du portrait
+    // AniList du catalogue (bloqué en hotlink). L'image du catalogue reste un repli.
+    const id = Number(card.id);
+    const image = Number.isSafeInteger(id) && id > 0 ? `/cards/sm/${id}.webp` : card.image;
+    if (image) images.set(card.name.trim().toLowerCase(), image);
+  }
+  // L'id donne directement la visuelle du site ; sinon le catalogue la fournit par nom.
+  const imageOf = (card: { id: number | null; name: string }): string | null =>
+    (card.id ? `/cards/sm/${card.id}.webp` : null) ??
+    images.get(card.name.trim().toLowerCase()) ??
+    null;
+  const cards = totals.byCard
+    .map((card) => ({ ...card, image: imageOf(card) }))
+    .sort(
+      (a, b) =>
+        rarityRank(a.rarity) - rarityRank(b.rarity) ||
+        b.lastAt - a.lastAt ||
+        a.name.localeCompare(b.name, 'fr'),
+    );
+  return { entries, totals: { opened: totals.opened, cards: totals.cards }, cards };
+}
+
+export interface PanelWriteLogData {
+  /** Écritures, de la plus ancienne à la plus récente. */
+  entries: readonly WriteLogEntry[];
+  summary: WriteLogSummary;
+}
+
+/** Journal local des écritures de jeu, sans lecture réseau. */
+export async function loadWriteLogPanel(now = Date.now()): Promise<PanelWriteLogData> {
+  const entries = await getWriteLog();
+  return { entries, summary: writeLogSummary(entries, now) };
 }

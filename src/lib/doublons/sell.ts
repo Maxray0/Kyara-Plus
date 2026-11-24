@@ -26,6 +26,26 @@ export interface SellOptions {
   gapMs?: number;
   /** Motif de l'invalidation de possession, visible dans le bus de données. */
   reason?: string;
+  /**
+   * Annonces actives comptées par carte, lues juste avant la passe. Fournie, elle active la
+   * garde : `sellNext` ne crée jamais plus d'annonces dans la passe que d'exemplaires libres
+   * (`sellable`, déjà net des copies en ligne lues par `buildCandidates`).
+   */
+  listed?: ReadonlyMap<number, number>;
+  /** Origine des annonces, visible dans le journal (vente automatique, panneau…). */
+  source?: string;
+}
+
+/** Exemplaires déjà en vente par carte, pour la garde anti-doublon de `sellNext`. */
+export function listedCounts(
+  listings: readonly { characterId: number; qty?: number }[],
+): Map<number, number> {
+  const counts = new Map<number, number>();
+  for (const listing of listings) {
+    const qty = Math.max(1, Math.trunc(Number(listing.qty ?? 1)) || 1);
+    counts.set(listing.characterId, (counts.get(listing.characterId) ?? 0) + qty);
+  }
+  return counts;
 }
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -81,6 +101,14 @@ export async function sellNext(
   const gap = options.gapMs ?? 1200;
   let placed = 0;
   let fails = 0;
+  // Sans inventaire d'annonces, la garde ne peut pas savoir ce qui est déjà en ligne : elle ne
+  // s'applique qu'aux appelants qui viennent de lire le marché.
+  const guardListings = options.listed !== undefined;
+  // Seules les annonces ouvertes *dans cette passe* comptent : les copies déjà en ligne sont
+  // déjà retirées de `sellable`, les compter ici les soustrairait une seconde fois.
+  const onSale = new Map<number, number>();
+  // Toute ligne du journal dit d'où vient l'annonce : vente automatique, panneau, page…
+  const origin = options.source ? ` · ${options.source}` : '';
 
   // Un changement de format ne se répare qu'en redemandant un prix : petit essai avant de décider.
   const flags = await shapeChangesItem.getValue();
@@ -112,6 +140,23 @@ export async function sellNext(
 
   for (const c of todo) {
     if (placed >= free) break;
+    // Une carte ne reçoit jamais plus d'annonces actives que d'exemplaires vendables : sinon
+    // une liste périmée mettrait aussi la copie gardée en vente.
+    const already = onSale.get(c.id) ?? 0;
+    if (guardListings && already >= c.sellable) {
+      c.status = '⏸ déjà en vente';
+      c.blocked = 'Déjà en vente';
+      c.checked = false;
+      log(
+        `${nameOf(c)} : annonce bloquée, ${already} exemplaire(s) mis en vente dans cette passe ` +
+          `pour ${c.sellable} vendable(s)` +
+          (c.locked > 0 ? ` (${c.locked} verrouillé(s) par Kyara)` : '') +
+          `${origin}.`,
+        'warn',
+      );
+      update();
+      continue;
+    }
     c.status = '⏳';
     update();
 
@@ -182,10 +227,16 @@ export async function sellNext(
     if (result.ok) {
       placed += 1;
       fails = 0;
+      onSale.set(c.id, (onSale.get(c.id) ?? 0) + 1);
       c.status = '✅ en vente';
       c.blocked = 'mis en vente';
       c.checked = false;
-      log(`${nameOf(c)} mis en vente à ${c.price} chakra`, 'sale');
+      log(
+        `${nameOf(c)} mis en vente à ${c.price} chakra` +
+          (guardListings ? ` (${already + 1}/${c.sellable} exemplaire(s) en ligne)` : '') +
+          origin,
+        'sale',
+      );
     } else {
       c.status = `❌ ${result.message}`;
       update();
@@ -261,7 +312,11 @@ export async function repriceListing(
   let placed = 0;
   let message = '';
   try {
-    placed = await sellNext(api, s, [card], 1, { ...options, gapMs: options.gapMs ?? 0 });
+    placed = await sellNext(api, s, [card], 1, {
+      ...options,
+      gapMs: options.gapMs ?? 0,
+      source: options.source ?? 'ajustement',
+    });
   } catch (error) {
     // L'ancienne annonce est déjà retirée : on remonte l'échec sans perdre cette information.
     message = error instanceof Error ? error.message : 'erreur inconnue';

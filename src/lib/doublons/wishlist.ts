@@ -1,5 +1,5 @@
 import { storage } from 'wxt/utils/storage';
-import type { ApiClient } from '../api';
+import { ApiError, AuthError, PassRequiredError, type ApiClient } from '../api';
 import { emitDataChange } from './data-events';
 
 export const WISHLIST_TTL_MS = 2 * 60_000;
@@ -167,4 +167,53 @@ export async function addWish(
   // que cette écriture vient de changer.
   await invalidateWishlistCache('ajout', store);
   return ids;
+}
+
+export interface ClearWishesOptions {
+  /** Pause entre deux retraits : le site limite les rafales. */
+  gapMs?: number;
+  /** Attente injectable pour les tests. */
+  wait?: (ms: number) => Promise<void>;
+  /** Identifiants à retirer ; par défaut, toute la liste relue. */
+  ids?: readonly number[];
+  store?: WishlistStore;
+}
+
+export interface ClearWishesResult {
+  removed: number;
+  /** Cartes encore dans la liste quand un retrait a échoué. */
+  remaining: number;
+  stop: string | null;
+}
+
+/**
+ * Vide la liste d'envies carte par carte (`DELETE /api/me/wishlist/{id}`), avec une pause
+ * entre deux appels et un arrêt au premier refus. Chaque retrait réussi vide le cache.
+ */
+export async function clearWishes(
+  api: Api,
+  options: ClearWishesOptions = {},
+): Promise<ClearWishesResult> {
+  const ids = options.ids ? [...options.ids] : await fetchWishlist(api);
+  const wait = options.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const gap = Math.max(0, options.gapMs ?? 600);
+  let removed = 0;
+  for (const [index, id] of ids.entries()) {
+    if (index > 0) await wait(gap);
+    try {
+      await removeWish(api, id, options.store);
+      removed += 1;
+    } catch (error) {
+      if (error instanceof AuthError || error instanceof PassRequiredError) throw error;
+      const message =
+        error instanceof ApiError
+          ? error.message || `Kyara a refusé le retrait (HTTP ${error.status}).`
+          : error instanceof Error
+            ? error.message
+            : 'erreur inconnue';
+      return { removed, remaining: ids.length - removed, stop: message };
+    }
+  }
+  await invalidateWishlistCache('vidage', options.store);
+  return { removed, remaining: 0, stop: null };
 }

@@ -1,6 +1,7 @@
 import { ApiError, AuthError, PassRequiredError, RateLimitedError, type ApiClient } from './api';
 import type { ContentRequest, RelayResponse } from './messages';
 import { isRelayWritable } from './messages';
+import { recordWriteRequest } from './write-log';
 
 export function toRelayError(error: unknown): RelayResponse {
   if (error instanceof ApiError) {
@@ -80,6 +81,17 @@ export function createRelayClient(deps: RelayDeps): Pick<ApiClient, 'request'> {
         }
         const result = response as RelayResponse | undefined;
         if (!result) continue;
+        // Une écriture relayée entre au journal, réussie ou refusée par le site.
+        if (method !== 'GET') {
+          recordWriteRequest(
+            method,
+            path,
+            options.body,
+            result.ok
+              ? { ok: true, status: null, error: null }
+              : { ok: false, status: result.status, error: result.message },
+          );
+        }
         if (result.ok) return result.data as T;
         throw fromRelayError(result);
       }

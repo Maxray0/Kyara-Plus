@@ -1,4 +1,5 @@
 import { authHeaders, type Session } from './auth';
+import { recordWriteRequest } from './write-log';
 
 export class ApiError extends Error {
   constructor(
@@ -146,7 +147,24 @@ export function createApiClient(options: ApiClientOptions) {
       if (!path.startsWith('/api/')) {
         return Promise.reject(new ApiError(0, 'Chemin API invalide', 'invalid_path'));
       }
-      return enqueue(() => send<T>(path, request));
+      const method = request.method ?? 'GET';
+      const task = enqueue(() => send<T>(path, request));
+      // Journal local des écritures de jeu : une entrée par requête, réussie ou refusée.
+      if (method === 'GET') return task;
+      return task.then(
+        (value) => {
+          recordWriteRequest(method, path, request.body, { ok: true, status: null, error: null });
+          return value;
+        },
+        (error: unknown) => {
+          recordWriteRequest(method, path, request.body, {
+            ok: false,
+            status: error instanceof ApiError ? error.status : null,
+            error: error instanceof Error ? error.message : 'erreur inconnue',
+          });
+          throw error;
+        },
+      );
     },
   };
 }
