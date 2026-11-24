@@ -1,0 +1,114 @@
+name: Soumission AMO
+
+# Soumet la version courante de Kyara Plus à addons.mozilla.org.
+#
+# Ce fichier est publié dans le dépôt public (Maxray0/Kyara-Plus) par
+# scripts/mirror-public.sh : le job tourne donc sur les sources publiques, jamais sur
+# l'arbre privé (docs, tests, outillage). Les secrets FIREFOX_JWT_ISSUER et
+# FIREFOX_JWT_SECRET se définissent dans les réglages de ce dépôt public.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Vérifier les identifiants AMO sans rien envoyer
+        type: boolean
+        default: false
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: soumission-amo
+  # Une soumission ne doit jamais être interrompue en cours d'envoi.
+  cancel-in-progress: false
+
+env:
+  EXTENSION_ID: kyara-plus@maxray.net
+
+jobs:
+  soumettre:
+    # Le dépôt privé ne fait que publier ce fichier : seule la copie publique soumet.
+    if: github.repository == 'Maxray0/Kyara-Plus'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Lire la version de package.json
+        id: version
+        run: echo "version=$(node -p 'JSON.parse(require("fs").readFileSync("package.json", "utf8")).version')" >> "$GITHUB_OUTPUT"
+
+      - name: Refuser une version déjà présente sur AMO
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          publiees=$(curl -fsS "https://addons.mozilla.org/api/v5/addons/addon/${EXTENSION_ID}/versions/?page_size=100" \
+            | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).results.map((v) => v.version).join("\n")')
+          if grep -qx "$VERSION" <<< "$publiees"; then
+            echo "::error::La version ${VERSION} existe déjà sur AMO. Incrémente \"version\" dans package.json avant de soumettre."
+            exit 1
+          fi
+          echo "Version ${VERSION} encore absente d'AMO."
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build:firefox
+
+      - name: Empaqueter l'extension
+        run: pnpm zip:firefox
+
+      - name: Construire l'archive de sources AMO
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # WXT produit sa propre archive de sources ; on ne l'envoie pas (elle décrit
+          # l'arbre privé). Celle-ci ne contient que le dépôt public et sa notice de build.
+          rm -f .output/*-sources.zip
+          git archive --format=zip -o ".output/kyara-plus-${VERSION}-sources-amo.zip" HEAD \
+            src public package.json pnpm-lock.yaml tsconfig.json wxt.config.ts \
+            .gitignore LICENSE AMO-SOURCES.md
+
+      - name: Vérifier les identifiants AMO
+        env:
+          FIREFOX_JWT_ISSUER: ${{ secrets.FIREFOX_JWT_ISSUER }}
+          FIREFOX_JWT_SECRET: ${{ secrets.FIREFOX_JWT_SECRET }}
+        run: |
+          if [ -z "$FIREFOX_JWT_ISSUER" ] || [ -z "$FIREFOX_JWT_SECRET" ]; then
+            echo "::error::Secrets absents dans Maxray0/Kyara-Plus : ajoute FIREFOX_JWT_ISSUER et FIREFOX_JWT_SECRET (identifiants JWT d'API du Developer Hub AMO)."
+            exit 1
+          fi
+
+      - name: Soumettre à AMO
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          FIREFOX_JWT_ISSUER: ${{ secrets.FIREFOX_JWT_ISSUER }}
+          FIREFOX_JWT_SECRET: ${{ secrets.FIREFOX_JWT_SECRET }}
+        run: |
+          arguments=(--firefox-extension-id "$EXTENSION_ID"
+                     --firefox-zip ".output/kyara-plus-${VERSION}-firefox.zip"
+                     --firefox-sources-zip ".output/kyara-plus-${VERSION}-sources-amo.zip")
+          if [ "$DRY_RUN" = "true" ]; then
+            arguments+=(--dry-run)
+            echo "Mode vérification : aucun envoi."
+          fi
+          pnpm exec wxt submit "${arguments[@]}"
+
+      - name: Conserver les archives
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: kyara-plus-amo
+          path: .output/*.zip
+          # .output commence par un point : sans cette option l'archive est ignorée.
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
